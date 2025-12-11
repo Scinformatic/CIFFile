@@ -69,10 +69,11 @@ stateDiagram-v2
 
 import re
 from collections.abc import Iterator
+from typing import Any
 
-from scifile.cif.exception import CIFParsingError, CIFParsingErrorType
-from scifile.cif.parser._token import Token, TOKENIZER
-from scifile.cif.parser._state import State
+from ._exception import CIFParsingError, CIFParsingErrorType
+from ._token import Token, TOKENIZER
+from ._state import State
 
 
 class CIFParser:
@@ -175,7 +176,7 @@ class CIFParser:
     # Public Methods
     # ==============
 
-    def parse(self, content: str):
+    def parse(self, content: str) -> tuple[Any, list[CIFParsingError]]:
         # Reset parser state variables
         self.file_content: str = content
         self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(self.file_content)
