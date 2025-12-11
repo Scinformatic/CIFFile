@@ -1,11 +1,22 @@
 
+from typing import TypedDict
 import itertools
 
-import polars as pl
 
 from scifile.cif.exception import CIFParsingErrorType
-from scifile.cif.validator import CIFFileValidator
 from scifile.cif.parser._parser import CIFParser
+
+
+class CIFFlatDict(TypedDict):
+    """TypedDict for CIF file represented as a flat dictionary."""
+
+    block_code: list[str]
+    frame_code_category: list[str | None]
+    frame_code_keyword: list[str | None]
+    data_name_category: list[str]
+    data_name_keyword: list[str]
+    data_values: list[list[str]]
+    loop_id: list[int]
 
 
 class CIFToDictParser(CIFParser):
@@ -33,30 +44,17 @@ class CIFToDictParser(CIFParser):
 
     # Implementation of abstract methods from CIFParser
 
-    def _finalize(self):
-        super()._finalize()
-
-        df = pl.DataFrame(
-            dict(
-                block_code=self._block_codes,
-                frame_code_category=self._frame_code_categories,
-                frame_code_keyword=self._frame_code_keywords,
-                data_name_category=self._data_name_categories,
-                data_name_keyword=self._data_name_keywords,
-                data_value=self._data_values,
-                loop_id=self._loop_id,
-            ),
-            dict(
-                block_code=pl.Utf8,
-                frame_code_category=pl.Utf8,
-                frame_code_keyword=pl.Utf8,
-                data_name_category=pl.Utf8,
-                data_name_keyword=pl.Utf8,
-                data_value=pl.List(pl.Utf8),
-                loop_id=pl.UInt32,
-            ),
+    def _return_data(self)
+        flat_dict = CIFFlatDict(
+            block_code=self._block_codes,
+            frame_code_category=self._frame_code_categories,
+            frame_code_keyword=self._frame_code_keywords,
+            data_name_category=self._data_name_categories,
+            data_name_keyword=self._data_name_keywords,
+            data_values=self._data_values,
+            loop_id=self._loop_id,
         )
-        return CIFFileValidator(df=df, errors=self.errors)
+        return flat_dict
 
     def _add_data_item(self):
         # data_value_list = self._curr_data_keyword_list
@@ -76,7 +74,7 @@ class CIFToDictParser(CIFParser):
         # column = self._curr_data_keyword_list
         # if len(column) != 0:
         #     self._raise_or_warn(CIFParsingErrorType.DUPLICATE)
-        new_column = list()
+        new_column = []
         self._curr_loop_columns.append(new_column)
         self._add_data(data_value=new_column, loop_id=self._curr_loop_id)
         return
