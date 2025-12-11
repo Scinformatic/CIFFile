@@ -147,3 +147,7 @@ cython_debug/
 data/_local_reports/
 data/_cache/
 !/dev/build/
+
+
+# Local
+.local/
