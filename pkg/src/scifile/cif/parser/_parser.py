@@ -76,7 +76,13 @@ from scifile.cif.parser._state import State
 
 
 class CIFParser:
-    """CIF file parser."""
+    """CIF file parser.
+
+    Notes
+    -----
+    - Errors are collected and returned, not raised immediately;
+      final validation is delegated to caller.
+    """
 
     def __init__(self):
         self._token_processor = {
@@ -145,7 +151,10 @@ class CIFParser:
             ),
             (State.IN_SAVE_LOOP_VALUE, Token.COMMENT): (self._do_nothing, State.IN_SAVE_LOOP_VALUE),
         }
-        """Mapping between (current state, received token) and (action, resulting state)."""
+        """Mapping between (current state, received token) and (action, resulting state).
+
+        This is a finite state machine that encodes exactly the state diagram shown in the module docstring.
+        """
 
         # Parser state variables
         self.file_content: str = None
@@ -182,16 +191,23 @@ class CIFParser:
         self.curr_data_value: str = None
         self.errors: list[CIFParsingError] = list()
 
+        # Loop over tokens
         for match in self._tokenizer:
             self.curr_match = match
             self.curr_token_type = Token(match.lastindex)
             self.curr_token_value = match.group(match.lastindex)
-            self._token_processor.get(self.curr_token_type, self._do_nothing)()
+
+            # Process/normalize token
+            processor_func = self._token_processor.get(self.curr_token_type, self._do_nothing)
+            processor_func()
+
+            # Store values and update state
             update_func, new_state = self._state_mapper.get(
                 (self.curr_state, self.curr_token_type), (self._wrong_token, self.curr_state)
             )
             update_func()
             self.curr_state = new_state
+
         return self._finalize()
 
     # Private Methods
@@ -201,11 +217,14 @@ class CIFParser:
     # ----------------
 
     def _process_block_code(self) -> None:
+        """Process block code token."""
         self.curr_block_code = self.curr_token_value
         return
 
     def _process_frame_code(self) -> None:
+        """Process frame code token."""
         if self.curr_token_value == "":
+            # Save frame end directive
             self.curr_token_type = Token.SAVE_END
             self.curr_frame_code_category = None
             self.curr_frame_code_keyword = None
@@ -220,11 +239,13 @@ class CIFParser:
         return
 
     def _process_loop_directive(self) -> None:
+        """Process loop directive token."""
         if self.curr_token_value != "":
             self._register_error(CIFParsingErrorType.LOOP_HAS_NAME)
         return
 
     def _process_data_name(self) -> None:
+        """Process data name token."""
         name_components = self.curr_token_value.split(".", 1)
         self.curr_data_name_category = name_components[0]
         try:
@@ -234,39 +255,40 @@ class CIFParser:
         return
 
     def _process_data_value(self) -> None:
+        """Process data value token."""
         self.curr_data_value = self.curr_token_value
         return
 
     def _process_data_value_quoted(self) -> None:
-        self.curr_data_value = self.curr_token_value.strip()
+        """Process quoted data value token."""
+        self.curr_data_value = self.curr_token_value
         self.curr_token_type = Token.VALUE
         return
 
     def _process_data_value_double_quoted(self) -> None:
-        self.curr_data_value = self.curr_token_value.strip()
+        """Process double-quoted data value token."""
+        self.curr_data_value = self.curr_token_value
         self.curr_token_type = Token.VALUE
         return
 
     def _process_data_value_text_field(self) -> None:
-        lines = self.curr_token_value.strip().splitlines()
-        lines_processed = [lines[0].strip()] + [
-            f"{' ' if line.startswith(' ') else ''}{line.strip()}" for line in lines[1:]
-        ]
-        self.curr_data_value = "".join(lines_processed)
+        """Process text field data value token.
+
+        Notes
+        -----
+        According to the [spec nr. 17](https://www.iucr.org/resources/cif/spec/version1.1/cifsyntax):
+        "Within a multi-line text field,
+        leading white space within text lines must be retained as part of the data value;
+        trailing white space on a line may however be elided."
+        """
+        lines = self.curr_token_value.splitlines()
+        lines_processed = [line.rstrip() for line in lines]
+        self.curr_data_value = "\n".join(lines_processed)
         self.curr_token_type = Token.VALUE
         return
 
-    # State Error Handlers
-    # --------------------
-
-    def _wrong_token(self) -> None:
-        if self.curr_token_type == Token.BAD_TOKEN:
-            self._register_error(CIFParsingErrorType.BAD_TOKEN)
-        elif self.curr_token_type in [Token.STOP, Token.GLOBAL, Token.FRAME_REF, Token.BRACKETS]:
-            self._register_error(CIFParsingErrorType.RESERVED_TOKEN)
-        else:
-            self._register_error(CIFParsingErrorType.UNEXPECTED_TOKEN)
-        return
+    # State Error Handler
+    # -------------------
 
     def _register_error(self, error_type: CIFParsingErrorType) -> None:
         """
@@ -291,13 +313,27 @@ class CIFParser:
     # --------------------
 
     def _finalize(self) -> None:
+        """Finalize parsing, performing any necessary checks."""
         if self.curr_state in (State.IN_LOOP_VALUE, State.IN_SAVE_LOOP_VALUE):
+            # End of file reached while in a loop; finalize loop
             self._finalize_loop()
         elif self.curr_state not in (State.IN_DATA, State.IN_SAVE):
+            # End of file reached in an invalid state
             self._register_error(CIFParsingErrorType.INCOMPLETE_FILE)
         return
 
+    def _wrong_token(self) -> None:
+        """Handle unexpected or bad token."""
+        if self.curr_token_type == Token.BAD_TOKEN:
+            self._register_error(CIFParsingErrorType.BAD_TOKEN)
+        elif self.curr_token_type in [Token.STOP, Token.GLOBAL, Token.FRAME_REF, Token.BRACKETS]:
+            self._register_error(CIFParsingErrorType.RESERVED_TOKEN)
+        else:
+            self._register_error(CIFParsingErrorType.UNEXPECTED_TOKEN)
+        return
+
     def _do_nothing(self):
+        """No operation."""
         return
 
     # Abstract methods to be implemented by subclasses
