@@ -1,9 +1,11 @@
 """CIF file token types and tokenizer.
 
-This module defines the different types of tokens
-that can be found in a CIF file,
-as well as the regular expression (regex)
-used to tokenize a CIF file.
+This module defines:
+
+- `Token`: An enumeration of different types of tokens
+  that can be found in a CIF file.
+- `TOKENIZER`: A regular expression (regex)
+  used to tokenize a CIF file.
 """
 
 from enum import Enum
