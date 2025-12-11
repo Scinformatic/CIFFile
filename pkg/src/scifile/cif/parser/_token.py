@@ -46,7 +46,7 @@ TOKENIZER = re.compile(
                 # `m` (cf. re.M, re.MULTILINE) causes the pattern characters '^' and '$' to also match
                 #  the beggining and end of each line, respectively
                 #  (in addition to matching the beggining and end of the whole string, respectively).
-                # `i` (cf. re.I, re.IGNORECASE) performs case-insensitive matching.
+                # `i` (cf. re.I, re.IGNORECASE) performs case-insensitive matching according to the CIF specification.
     # The following creates different capturing groups (enumerated starting from 1),
     #  each matching one token type. Notice the order of groups matters,
     #  since the matching terminates with the first group match.
