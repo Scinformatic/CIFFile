@@ -1,3 +1,5 @@
+"""CIF file parser to convert CIF files into flat/nested dictionaries."""
+
 
 from typing import TypedDict
 import itertools
@@ -25,8 +27,6 @@ class CIFToDictParser(CIFParser):
     def __init__(self):
         super().__init__()
 
-        self._cif_dict_horizontal: dict = dict()
-
         self._block_codes: list[str] = list()
         self._frame_code_categories: list[str | None] = list()
         self._frame_code_keywords: list[str | None] = list()
@@ -44,7 +44,7 @@ class CIFToDictParser(CIFParser):
 
     # Implementation of abstract methods from CIFParser
 
-    def _return_data(self)
+    def _return_data(self) -> CIFFlatDict:
         flat_dict = CIFFlatDict(
             block_code=self._block_codes,
             frame_code_category=self._frame_code_categories,
@@ -57,10 +57,6 @@ class CIFToDictParser(CIFParser):
         return flat_dict
 
     def _add_data_item(self):
-        # data_value_list = self._curr_data_keyword_list
-        # if len(data_value_list) != 0:
-        #     self._raise_or_warn(CIFParsingErrorType.DUPLICATE)
-        # data_value_list.append(self.curr_data_value)
         self._add_data(data_value=[self.curr_data_value], loop_id=0)
         return
 
@@ -71,9 +67,6 @@ class CIFToDictParser(CIFParser):
         return
 
     def _add_loop_keyword(self):
-        # column = self._curr_data_keyword_list
-        # if len(column) != 0:
-        #     self._raise_or_warn(CIFParsingErrorType.DUPLICATE)
         new_column = []
         self._curr_loop_columns.append(new_column)
         self._add_data(data_value=new_column, loop_id=self._curr_loop_id)
@@ -94,35 +87,10 @@ class CIFToDictParser(CIFParser):
             self._register_error(CIFParsingErrorType.TABLE_INCOMPLETE)
         return
 
-    # Private Properties
-    # ==================
-
-    @property
-    def _curr_data_block_dict(self) -> dict:
-        return self._cif_dict_horizontal.setdefault(self.curr_block_code, dict())
-
-    @property
-    def _curr_save_frame_category_dict(self) -> dict:
-        return self._curr_data_block_dict.setdefault(self.curr_frame_code_category, dict())
-
-    @property
-    def _curr_save_frame_keyword_dict(self) -> dict:
-        return self._curr_save_frame_category_dict.setdefault(self.curr_frame_code_keyword, dict())
-
-    @property
-    def _curr_data_category_dict(self) -> dict:
-        return self._curr_save_frame_keyword_dict.setdefault(self.curr_data_name_category, dict())
-
-    # @property
-    # def _curr_data_keyword_list(self) -> list:
-    #     return self._curr_data_category_dict.setdefault(self.curr_data_name_keyword, list())
-
     # Private Methods
     # ===============
 
     def _add_data(self, data_value: str | list, loop_id: int):
-        self._curr_data_category_dict[self.curr_data_name_keyword] = data_value
-
         self._block_codes.append(self.curr_block_code)
         self._frame_code_categories.append(self.curr_frame_code_category)
         self._frame_code_keywords.append(self.curr_frame_code_keyword)
