@@ -208,7 +208,14 @@ class CIFParser:
             update_func()
             self.curr_state = new_state
 
-        return self._finalize()
+        # Finalize parsing, performing any necessary checks.
+        if self.curr_state in (State.IN_LOOP_VALUE, State.IN_SAVE_LOOP_VALUE):
+            # End of file reached while in a loop; finalize loop
+            self._finalize_loop()
+        elif self.curr_state not in (State.IN_DATA, State.IN_SAVE):
+            # End of file reached in an invalid state
+            self._register_error(CIFParsingErrorType.INCOMPLETE_FILE)
+        return self._return_data(), self.errors
 
     # Private Methods
     # ===============
@@ -312,16 +319,6 @@ class CIFParser:
     # State Update Actions
     # --------------------
 
-    def _finalize(self) -> None:
-        """Finalize parsing, performing any necessary checks."""
-        if self.curr_state in (State.IN_LOOP_VALUE, State.IN_SAVE_LOOP_VALUE):
-            # End of file reached while in a loop; finalize loop
-            self._finalize_loop()
-        elif self.curr_state not in (State.IN_DATA, State.IN_SAVE):
-            # End of file reached in an invalid state
-            self._register_error(CIFParsingErrorType.INCOMPLETE_FILE)
-        return
-
     def _wrong_token(self) -> None:
         """Handle unexpected or bad token."""
         if self.curr_token_type == Token.BAD_TOKEN:
@@ -350,3 +347,4 @@ class CIFParser:
 
     def _finalize_loop(self): ...
 
+    def _return_data(self): ...
