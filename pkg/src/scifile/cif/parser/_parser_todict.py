@@ -31,25 +31,32 @@ class CIFToDictParser(CIFParser):
         self._curr_loop_columns: list[list[str]] = list()
         return
 
-    @property
-    def _curr_data_block_dict(self) -> dict:
-        return self._cif_dict_horizontal.setdefault(self.curr_block_code, dict())
+    # Implementation of abstract methods from CIFParser
 
-    @property
-    def _curr_save_frame_category_dict(self) -> dict:
-        return self._curr_data_block_dict.setdefault(self.curr_frame_code_category, dict())
+    def _finalize(self):
+        super()._finalize()
 
-    @property
-    def _curr_save_frame_keyword_dict(self) -> dict:
-        return self._curr_save_frame_category_dict.setdefault(self.curr_frame_code_keyword, dict())
-
-    @property
-    def _curr_data_category_dict(self) -> dict:
-        return self._curr_save_frame_keyword_dict.setdefault(self.curr_data_name_category, dict())
-
-    # @property
-    # def _curr_data_keyword_list(self) -> list:
-    #     return self._curr_data_category_dict.setdefault(self.curr_data_name_keyword, list())
+        df = pl.DataFrame(
+            dict(
+                block_code=self._block_codes,
+                frame_code_category=self._frame_code_categories,
+                frame_code_keyword=self._frame_code_keywords,
+                data_name_category=self._data_name_categories,
+                data_name_keyword=self._data_name_keywords,
+                data_value=self._data_values,
+                loop_id=self._loop_id,
+            ),
+            dict(
+                block_code=pl.Utf8,
+                frame_code_category=pl.Utf8,
+                frame_code_keyword=pl.Utf8,
+                data_name_category=pl.Utf8,
+                data_name_keyword=pl.Utf8,
+                data_value=pl.List(pl.Utf8),
+                loop_id=pl.UInt32,
+            ),
+        )
+        return CIFFileValidator(df=df, errors=self.errors)
 
     def _add_data_item(self):
         # data_value_list = self._curr_data_keyword_list
@@ -79,11 +86,6 @@ class CIFToDictParser(CIFParser):
         self._fill_loop_value()
         return
 
-    def _register_loop(self):
-        self._loop_value_lists = itertools.cycle(self._curr_loop_columns)
-        self._loop_value_lists_idx = itertools.cycle(range(len(self._curr_loop_columns)))
-        return
-
     def _fill_loop_value(self):
         next(self._loop_value_lists).append(self.curr_data_value)
         next(self._loop_value_lists_idx)
@@ -94,30 +96,31 @@ class CIFToDictParser(CIFParser):
             self._register_error(CIFParsingErrorType.TABLE_INCOMPLETE)
         return
 
-    def _finalize(self):
-        super()._finalize()
+    # Private Properties
+    # ==================
 
-        df = pl.DataFrame(
-            dict(
-                block_code=self._block_codes,
-                frame_code_category=self._frame_code_categories,
-                frame_code_keyword=self._frame_code_keywords,
-                data_name_category=self._data_name_categories,
-                data_name_keyword=self._data_name_keywords,
-                data_value=self._data_values,
-                loop_id=self._loop_id,
-            ),
-            dict(
-                block_code=pl.Utf8,
-                frame_code_category=pl.Utf8,
-                frame_code_keyword=pl.Utf8,
-                data_name_category=pl.Utf8,
-                data_name_keyword=pl.Utf8,
-                data_value=pl.List(pl.Utf8),
-                loop_id=pl.UInt32,
-            ),
-        )
-        return CIFFileValidator(df=df, errors=self.errors)
+    @property
+    def _curr_data_block_dict(self) -> dict:
+        return self._cif_dict_horizontal.setdefault(self.curr_block_code, dict())
+
+    @property
+    def _curr_save_frame_category_dict(self) -> dict:
+        return self._curr_data_block_dict.setdefault(self.curr_frame_code_category, dict())
+
+    @property
+    def _curr_save_frame_keyword_dict(self) -> dict:
+        return self._curr_save_frame_category_dict.setdefault(self.curr_frame_code_keyword, dict())
+
+    @property
+    def _curr_data_category_dict(self) -> dict:
+        return self._curr_save_frame_keyword_dict.setdefault(self.curr_data_name_category, dict())
+
+    # @property
+    # def _curr_data_keyword_list(self) -> list:
+    #     return self._curr_data_category_dict.setdefault(self.curr_data_name_keyword, list())
+
+    # Private Methods
+    # ===============
 
     def _add_data(self, data_value: str | list, loop_id: int):
         self._curr_data_category_dict[self.curr_data_name_keyword] = data_value
@@ -129,4 +132,9 @@ class CIFToDictParser(CIFParser):
         self._data_name_keywords.append(self.curr_data_name_keyword)
         self._data_values.append(data_value)
         self._loop_id.append(loop_id)
+        return
+
+    def _register_loop(self):
+        self._loop_value_lists = itertools.cycle(self._curr_loop_columns)
+        self._loop_value_lists_idx = itertools.cycle(range(len(self._curr_loop_columns)))
         return
