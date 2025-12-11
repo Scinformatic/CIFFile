@@ -5,8 +5,8 @@ from typing import TypedDict
 import itertools
 
 
-from scifile.cif.exception import CIFParsingErrorType
-from scifile.cif.parser._parser import CIFParser
+from ._exception import CIFParsingErrorType
+from ._parser import CIFParser
 
 
 class CIFFlatDict(TypedDict):
