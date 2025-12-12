@@ -1,10 +1,5 @@
 """CIF file parser.
 
-This module defines:
-
-- `CIFParser`: Base class for CIF file parsers.
-
-
 Notes
 -----
 State diagram of a CIF file parser:
@@ -67,11 +62,13 @@ stateDiagram-v2
 ```
 """
 
+import itertools
 import re
 from collections.abc import Iterator
 from typing import Any, NamedTuple
 
 from ._exception import CIFParsingError, CIFParsingErrorType
+from ._output import CIFFlatDict
 from ._token import Token, TOKENIZER
 from ._state import State
 
@@ -192,6 +189,20 @@ class CIFParser:
         self.seen_frame_codes_in_block: dict[str, SeenCodeInfo] = {}
 
         self.errors: list[CIFParsingError] = []
+
+        self._block_codes: list[str] = []
+        self._frame_code_categories: list[str | None] = []
+        self._frame_code_keywords: list[str | None] = []
+        self._data_name_categories: list[str | None] = []
+        self._data_name_keywords: list[str | None] = []
+        self._data_values: list[list[str]] = []
+        self._loop_id: list[int] = []
+
+        self._loop_value_lists: itertools.cycle = None
+        self._loop_value_lists_idx: itertools.cycle = None
+
+        self._curr_loop_id: int = 0
+        self._curr_loop_columns: list[list[str]] = []
         return
 
     # Public Methods
@@ -243,7 +254,7 @@ class CIFParser:
             self._finalize_loop()
         elif self.curr_state not in (State.IN_DATA, State.IN_SAVE):
             # End of file reached in an invalid state
-            self._register_error(CIFParsingErrorType.INCOMPLETE_FILE)
+            self._register_error(CIFParsingErrorType.FILE_INCOMPLETE)
         return self._return_data(), self.errors
 
     # Private Methods
@@ -255,6 +266,8 @@ class CIFParser:
     def _process_block_code(self) -> None:
         """Process block code token."""
         block_code = self.curr_token_value
+        if block_code == "":
+            self._register_error(CIFParsingErrorType.BLOCK_CODE_EMPTY)
 
         # Set current values
         self.curr_block_code = block_code
@@ -268,7 +281,7 @@ class CIFParser:
         # Update seen codes trackers
         self.seen_frame_codes_in_block = {}
         if block_code in self.seen_block_codes_in_file:
-            self._register_error(CIFParsingErrorType.DUPLICATE_BLOCK_CODE)
+            self._register_error(CIFParsingErrorType.BLOCK_CODE_DUPLICATE)
         self.seen_block_codes_in_file[block_code] = SeenCodeInfo(
             idx=self.curr_token_idx,
             start=self.curr_match.start(),
@@ -293,7 +306,7 @@ class CIFParser:
 
         # Update seen codes trackers
         if frame_code in self.seen_frame_codes_in_block:
-            self._register_error(CIFParsingErrorType.DUPLICATE)
+            self._register_error(CIFParsingErrorType.FRAME_CODE_DUPLICATE)
         self.seen_frame_codes_in_block[frame_code] = SeenCodeInfo(
             idx=self.curr_token_idx,
             start=self.curr_match.start(),
@@ -311,7 +324,7 @@ class CIFParser:
     def _process_loop(self) -> None:
         """Process loop directive token."""
         if self.curr_token_value != "":
-            self._register_error(CIFParsingErrorType.LOOP_HAS_NAME)
+            self._register_error(CIFParsingErrorType.LOOP_NAMED)
         return
 
     def _process_name(self) -> None:
@@ -385,11 +398,11 @@ class CIFParser:
     def _wrong_token(self) -> None:
         """Handle unexpected or bad token."""
         if self.curr_token_type == Token.BAD_TOKEN:
-            self._register_error(CIFParsingErrorType.BAD_TOKEN)
+            self._register_error(CIFParsingErrorType.TOKEN_BAD)
         elif self.curr_token_type in [Token.STOP, Token.GLOBAL, Token.FRAME_REF, Token.BRACKETS]:
-            self._register_error(CIFParsingErrorType.RESERVED_TOKEN)
+            self._register_error(CIFParsingErrorType.TOKEN_RESERVED)
         else:
-            self._register_error(CIFParsingErrorType.UNEXPECTED_TOKEN)
+            self._register_error(CIFParsingErrorType.TOKEN_UNEXPECTED)
         return
 
     def _noop(self):
@@ -398,16 +411,63 @@ class CIFParser:
 
     # Abstract methods to be implemented by subclasses
 
-    def _add_data_item(self): ...
+    def _add_data_item(self):
+        self._add_data(data_value=[self.curr_data_value], loop_id=0)
+        return
 
-    def _initialize_loop(self): ...
+    def _initialize_loop(self):
+        self._curr_loop_id += 1
+        self._curr_loop_columns = []
+        self._add_loop_keyword()
+        return
 
-    def _add_loop_keyword(self): ...
+    def _add_loop_keyword(self):
+        new_column = []
+        self._curr_loop_columns.append(new_column)
+        self._add_data(data_value=new_column, loop_id=self._curr_loop_id)
+        return
 
-    def _register_and_fill_loop(self): ...
+    def _register_and_fill_loop(self):
+        self._register_loop()
+        self._fill_loop_value()
+        return
 
-    def _fill_loop_value(self): ...
+    def _fill_loop_value(self):
+        next(self._loop_value_lists).append(self.curr_data_value)
+        next(self._loop_value_lists_idx)
+        return
 
-    def _finalize_loop(self): ...
+    def _finalize_loop(self):
+        if next(self._loop_value_lists_idx) != 0:
+            self._register_error(CIFParsingErrorType.TABLE_INCOMPLETE)
+        return
 
-    def _return_data(self): ...
+    def _return_data(self) -> CIFFlatDict:
+        flat_dict = CIFFlatDict(
+            block_code=self._block_codes,
+            frame_code_category=self._frame_code_categories,
+            frame_code_keyword=self._frame_code_keywords,
+            data_name_category=self._data_name_categories,
+            data_name_keyword=self._data_name_keywords,
+            data_values=self._data_values,
+            loop_id=self._loop_id,
+        )
+        return flat_dict
+
+    # Private Methods
+    # ===============
+
+    def _add_data(self, data_value: str | list, loop_id: int):
+        self._block_codes.append(self.curr_block_code)
+        self._frame_code_categories.append(self.curr_frame_code_category)
+        self._frame_code_keywords.append(self.curr_frame_code_keyword)
+        self._data_name_categories.append(self.curr_data_name_category)
+        self._data_name_keywords.append(self.curr_data_name_keyword)
+        self._data_values.append(data_value)
+        self._loop_id.append(loop_id)
+        return
+
+    def _register_loop(self):
+        self._loop_value_lists = itertools.cycle(self._curr_loop_columns)
+        self._loop_value_lists_idx = itertools.cycle(range(len(self._curr_loop_columns)))
+        return
