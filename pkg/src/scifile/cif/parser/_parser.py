@@ -69,11 +69,31 @@ stateDiagram-v2
 
 import re
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, NamedTuple
 
 from ._exception import CIFParsingError, CIFParsingErrorType
 from ._token import Token, TOKENIZER
 from ._state import State
+
+
+class SeenCodeInfo(NamedTuple):
+    """Information about a seen block/frame code.
+
+    This is used to track the occurrences of data block and save frames
+    to generate appropriate error messages in case of duplicates.
+
+    Attributes
+    ----------
+    idx
+        Index of the token in the file where the block/frame code was first seen.
+    start
+        Start position index of the block/frame code in the file content.
+    end
+        End position index of the block/frame code in the file content.
+    """
+    idx: int
+    start: int
+    end: int
 
 
 class CIFParser:
@@ -87,70 +107,63 @@ class CIFParser:
 
     def __init__(self):
         self._token_processor = {
-            Token.DATA: self._process_block_code,
-            Token.SAVE: self._process_frame_code,
-            Token.LOOP: self._process_loop_directive,
-            Token.NAME: self._process_data_name,
-            Token.VALUE: self._process_data_value,
-            Token.VALUE_QUOTED: self._process_data_value_quoted,
-            Token.VALUE_DOUBLE_QUOTED: self._process_data_value_double_quoted,
-            Token.VALUE_FIELD: self._process_data_value_text_field,
+            Token.VALUE_FIELD: self._process_value_text_field,
+            Token.COMMENT: self._process_comment,
+            Token.VALUE_QUOTED: self._process_value_quoted,
+            Token.VALUE_DOUBLE_QUOTED: self._process_value_double_quoted,
+            Token.NAME: self._process_name,
+            Token.LOOP: self._process_loop,
+            Token.FRAME_CODE: self._process_frame_code,
+            Token.FRAME_END: self._process_frame_end,
+            Token.BLOCK_CODE: self._process_block_code,
+            Token.VALUE: self._process_value,
         }
         """Mapping between token type and its processing method."""
 
         self._state_mapper = {
-            (State.IN_FILE, Token.DATA): (self._do_nothing, State.JUST_IN_DATA),
-            (State.IN_FILE, Token.COMMENT): (self._do_nothing, State.IN_FILE),
-            (State.JUST_IN_DATA, Token.SAVE): (self._do_nothing, State.JUST_IN_SAVE),
-            (State.JUST_IN_DATA, Token.LOOP): (self._do_nothing, State.JUST_IN_LOOP),
-            (State.JUST_IN_DATA, Token.NAME): (self._do_nothing, State.IN_NAME),
-            (State.JUST_IN_DATA, Token.COMMENT): (self._do_nothing, State.JUST_IN_DATA),
-            (State.JUST_IN_SAVE, Token.LOOP): (self._do_nothing, State.JUST_IN_SAVE_LOOP),
-            (State.JUST_IN_SAVE, Token.NAME): (self._do_nothing, State.IN_SAVE_NAME),
-            (State.JUST_IN_SAVE, Token.COMMENT): (self._do_nothing, State.JUST_IN_SAVE),
-            (State.JUST_IN_LOOP, Token.NAME): (self._initialize_loop, State.IN_LOOP_NAME),
-            (State.JUST_IN_LOOP, Token.COMMENT): (self._do_nothing, State.JUST_IN_LOOP),
-            (State.IN_NAME, Token.VALUE): (self._add_data_item, State.IN_DATA),
-            (State.IN_NAME, Token.COMMENT): (self._do_nothing, State.IN_NAME),
-            (State.JUST_IN_SAVE_LOOP, Token.NAME): (self._initialize_loop, State.IN_SAVE_LOOP_NAME),
-            (State.JUST_IN_SAVE_LOOP, Token.COMMENT): (self._do_nothing, State.JUST_IN_SAVE_LOOP),
-            (State.IN_SAVE_NAME, Token.VALUE): (self._add_data_item, State.IN_SAVE),
-            (State.IN_SAVE_NAME, Token.COMMENT): (self._do_nothing, State.IN_SAVE_NAME),
-            (State.IN_LOOP_NAME, Token.NAME): (self._add_loop_keyword, State.IN_LOOP_NAME),
-            (State.IN_LOOP_NAME, Token.VALUE): (self._register_and_fill_loop, State.IN_LOOP_VALUE),
-            (State.IN_LOOP_NAME, Token.COMMENT): (self._do_nothing, State.IN_LOOP_NAME),
-            (State.IN_DATA, Token.DATA): (self._do_nothing, State.JUST_IN_DATA),
-            (State.IN_DATA, Token.SAVE): (self._do_nothing, State.JUST_IN_SAVE),
-            (State.IN_DATA, Token.LOOP): (self._do_nothing, State.JUST_IN_LOOP),
-            (State.IN_DATA, Token.NAME): (self._do_nothing, State.IN_NAME),
-            (State.IN_DATA, Token.COMMENT): (self._do_nothing, State.IN_DATA),
-            (State.IN_SAVE_LOOP_NAME, Token.NAME): (
-                self._add_loop_keyword,
-                State.IN_SAVE_LOOP_NAME,
-            ),
-            (State.IN_SAVE_LOOP_NAME, Token.VALUE): (
-                self._register_and_fill_loop,
-                State.IN_SAVE_LOOP_VALUE,
-            ),
-            (State.IN_SAVE_LOOP_NAME, Token.COMMENT): (self._do_nothing, State.IN_SAVE_LOOP_NAME),
-            (State.IN_SAVE, Token.SAVE_END): (self._do_nothing, State.IN_DATA),
-            (State.IN_SAVE, Token.LOOP): (self._do_nothing, State.JUST_IN_SAVE_LOOP),
-            (State.IN_SAVE, Token.NAME): (self._do_nothing, State.IN_SAVE_NAME),
-            (State.IN_SAVE, Token.COMMENT): (self._do_nothing, State.IN_SAVE),
-            (State.IN_LOOP_VALUE, Token.DATA): (self._finalize_loop, State.JUST_IN_DATA),
-            (State.IN_LOOP_VALUE, Token.SAVE): (self._finalize_loop, State.JUST_IN_SAVE),
-            (State.IN_LOOP_VALUE, Token.LOOP): (self._finalize_loop, State.JUST_IN_LOOP),
-            (State.IN_LOOP_VALUE, Token.NAME): (self._finalize_loop, State.IN_NAME),
-            (State.IN_LOOP_VALUE, Token.VALUE): (self._fill_loop_value, State.IN_LOOP_VALUE),
-            (State.IN_LOOP_VALUE, Token.COMMENT): (self._do_nothing, State.IN_LOOP_VALUE),
-            (State.IN_SAVE_LOOP_VALUE, Token.SAVE_END): (self._finalize_loop, State.IN_DATA),
-            (State.IN_SAVE_LOOP_VALUE, Token.LOOP): (self._finalize_loop, State.JUST_IN_SAVE_LOOP),
-            (State.IN_SAVE_LOOP_VALUE, Token.NAME): (self._finalize_loop, State.IN_SAVE_NAME),
-            (State.IN_SAVE_LOOP_VALUE, Token.VALUE): (
-                self._fill_loop_value,
-                State.IN_SAVE_LOOP_VALUE,
-            ),
-            (State.IN_SAVE_LOOP_VALUE, Token.COMMENT): (self._do_nothing, State.IN_SAVE_LOOP_VALUE),
+            (State.IN_FILE, Token.BLOCK_CODE):           (self._noop, State.JUST_IN_DATA),
+            (State.IN_FILE, Token.COMMENT):              (self._noop, State.IN_FILE),
+            (State.JUST_IN_DATA, Token.FRAME_CODE):      (self._noop, State.JUST_IN_SAVE),
+            (State.JUST_IN_DATA, Token.LOOP):            (self._noop, State.JUST_IN_LOOP),
+            (State.JUST_IN_DATA, Token.NAME):            (self._noop, State.IN_NAME),
+            (State.JUST_IN_DATA, Token.COMMENT):         (self._noop, State.JUST_IN_DATA),
+            (State.JUST_IN_SAVE, Token.LOOP):            (self._noop, State.JUST_IN_SAVE_LOOP),
+            (State.JUST_IN_SAVE, Token.NAME):            (self._noop, State.IN_SAVE_NAME),
+            (State.JUST_IN_SAVE, Token.COMMENT):         (self._noop, State.JUST_IN_SAVE),
+            (State.JUST_IN_LOOP, Token.NAME):            (self._initialize_loop, State.IN_LOOP_NAME),
+            (State.JUST_IN_LOOP, Token.COMMENT):         (self._noop, State.JUST_IN_LOOP),
+            (State.IN_NAME, Token.VALUE):                (self._add_data_item, State.IN_DATA),
+            (State.IN_NAME, Token.COMMENT):              (self._noop, State.IN_NAME),
+            (State.JUST_IN_SAVE_LOOP, Token.NAME):       (self._initialize_loop, State.IN_SAVE_LOOP_NAME),
+            (State.JUST_IN_SAVE_LOOP, Token.COMMENT):    (self._noop, State.JUST_IN_SAVE_LOOP),
+            (State.IN_SAVE_NAME, Token.VALUE):           (self._add_data_item, State.IN_SAVE),
+            (State.IN_SAVE_NAME, Token.COMMENT):         (self._noop, State.IN_SAVE_NAME),
+            (State.IN_LOOP_NAME, Token.NAME):            (self._add_loop_keyword, State.IN_LOOP_NAME),
+            (State.IN_LOOP_NAME, Token.VALUE):           (self._register_and_fill_loop, State.IN_LOOP_VALUE),
+            (State.IN_LOOP_NAME, Token.COMMENT):         (self._noop, State.IN_LOOP_NAME),
+            (State.IN_DATA, Token.BLOCK_CODE):           (self._noop, State.JUST_IN_DATA),
+            (State.IN_DATA, Token.FRAME_CODE):           (self._noop, State.JUST_IN_SAVE),
+            (State.IN_DATA, Token.LOOP):                 (self._noop, State.JUST_IN_LOOP),
+            (State.IN_DATA, Token.NAME):                 (self._noop, State.IN_NAME),
+            (State.IN_DATA, Token.COMMENT):              (self._noop, State.IN_DATA),
+            (State.IN_SAVE_LOOP_NAME, Token.NAME):       (self._add_loop_keyword, State.IN_SAVE_LOOP_NAME),
+            (State.IN_SAVE_LOOP_NAME, Token.VALUE):      (self._register_and_fill_loop, State.IN_SAVE_LOOP_VALUE),
+            (State.IN_SAVE_LOOP_NAME, Token.COMMENT):    (self._noop, State.IN_SAVE_LOOP_NAME),
+            (State.IN_SAVE, Token.FRAME_END):            (self._noop, State.IN_DATA),
+            (State.IN_SAVE, Token.LOOP):                 (self._noop, State.JUST_IN_SAVE_LOOP),
+            (State.IN_SAVE, Token.NAME):                 (self._noop, State.IN_SAVE_NAME),
+            (State.IN_SAVE, Token.COMMENT):              (self._noop, State.IN_SAVE),
+            (State.IN_LOOP_VALUE, Token.BLOCK_CODE):     (self._finalize_loop, State.JUST_IN_DATA),
+            (State.IN_LOOP_VALUE, Token.FRAME_CODE):     (self._finalize_loop, State.JUST_IN_SAVE),
+            (State.IN_LOOP_VALUE, Token.LOOP):           (self._finalize_loop, State.JUST_IN_LOOP),
+            (State.IN_LOOP_VALUE, Token.NAME):           (self._finalize_loop, State.IN_NAME),
+            (State.IN_LOOP_VALUE, Token.VALUE):          (self._fill_loop_value, State.IN_LOOP_VALUE),
+            (State.IN_LOOP_VALUE, Token.COMMENT):        (self._noop, State.IN_LOOP_VALUE),
+            (State.IN_SAVE_LOOP_VALUE, Token.FRAME_END): (self._finalize_loop, State.IN_DATA),
+            (State.IN_SAVE_LOOP_VALUE, Token.LOOP):      (self._finalize_loop, State.JUST_IN_SAVE_LOOP),
+            (State.IN_SAVE_LOOP_VALUE, Token.NAME):      (self._finalize_loop, State.IN_SAVE_NAME),
+            (State.IN_SAVE_LOOP_VALUE, Token.VALUE):     (self._fill_loop_value, State.IN_SAVE_LOOP_VALUE),
+            (State.IN_SAVE_LOOP_VALUE, Token.COMMENT):   (self._noop, State.IN_SAVE_LOOP_VALUE),
         }
         """Mapping between (current state, received token) and (action, resulting state).
 
@@ -158,19 +171,28 @@ class CIFParser:
         """
 
         # Parser state variables
-        self.file_content: str = None
-        self._tokenizer: Iterator[re.Match] = None
-        self.curr_state: State = None
+        self.file_content: str = ""
+        self.tokenizer: Iterator[re.Match] = None
+
+        self.curr_state: State = State.IN_FILE
+        self.curr_token_idx: int = 0
         self.curr_match: re.Match = None
-        self.curr_token_type: Token = None
-        self.curr_token_value: str = None
-        self.curr_block_code: str = None
-        self.curr_frame_code_category: str = None
-        self.curr_frame_code_keyword: str = None
-        self.curr_data_name_category: str = None
-        self.curr_data_name_keyword: str = None
-        self.curr_data_value: str = None
-        self.errors: list[CIFParsingError] = None
+        self.curr_token_type: Token = Token.BAD_TOKEN
+        self.curr_token_value: str = ""
+
+        # Current address in the CIF structure and values being processed
+        self.curr_block_code: str | None = None
+        self.curr_frame_code: str | None = None
+        self.curr_frame_code_category: str | None = None
+        self.curr_frame_code_keyword: str | None = None
+        self.curr_data_name_category: str | None = None
+        self.curr_data_name_keyword: str | None = None
+        self.curr_data_value: str | None = None
+
+        self.seen_block_codes_in_file: dict[str, SeenCodeInfo] = {}
+        self.seen_frame_codes_in_block: dict[str, SeenCodeInfo] = {}
+
+        self.errors: list[CIFParsingError] = []
         return
 
     # Public Methods
@@ -178,28 +200,35 @@ class CIFParser:
 
     def parse(self, content: str) -> tuple[Any, list[CIFParsingError]]:
         # Reset parser state variables
-        self.file_content: str = content
-        self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(self.file_content)
+        self.file_content = content
+        self.tokenizer = TOKENIZER.finditer(self.file_content)
+
         self.curr_state = State.IN_FILE
-        self.curr_match: re.Match = None
-        self.curr_token_type: Token = None
-        self.curr_token_value: str = None
-        self.curr_block_code: str = None
-        self.curr_frame_code_category: str = None
-        self.curr_frame_code_keyword: str = None
-        self.curr_data_name_category: str = None
-        self.curr_data_name_keyword: str = None
-        self.curr_data_value: str = None
-        self.errors: list[CIFParsingError] = list()
+        self.curr_token_idx = 0
+        self.curr_match = None
+        self.curr_token_type = Token.BAD_TOKEN
+        self.curr_token_value = None
+
+        self.curr_block_code = None
+        self.curr_frame_code = None
+        self.curr_frame_code_category = None
+        self.curr_frame_code_keyword = None
+        self.curr_data_name_category = None
+        self.curr_data_name_keyword = None
+        self.curr_data_value = None
+
+        self.seen_block_codes_in_file = {}
+        self.seen_frame_codes_in_block = {}
+
+        self.errors = []
 
         # Loop over tokens
-        for match in self._tokenizer:
-            self.curr_match = match
-            self.curr_token_type = Token(match.lastindex)
-            self.curr_token_value = match.group(match.lastindex)
+        for self.curr_token_idx, self.curr_match in enumerate(self.tokenizer):
+            self.curr_token_type = Token(self.curr_match.lastindex)
+            self.curr_token_value = self.curr_match.group(self.curr_match.lastindex)
 
             # Process/normalize token
-            processor_func = self._token_processor.get(self.curr_token_type, self._do_nothing)
+            processor_func = self._token_processor.get(self.curr_token_type, self._noop)
             processor_func()
 
             # Store values and update state
@@ -226,33 +255,67 @@ class CIFParser:
 
     def _process_block_code(self) -> None:
         """Process block code token."""
-        self.curr_block_code = self.curr_token_value
+        block_code = self.curr_token_value
+
+        # Set current values
+        self.curr_block_code = block_code
+        self.curr_frame_code = None
+        self.curr_frame_code_category = None
+        self.curr_frame_code_keyword = None
+        self.curr_data_name_category = None
+        self.curr_data_name_keyword = None
+        self.curr_data_value = None
+
+        # Update seen codes trackers
+        self.seen_frame_codes_in_block = {}
+        if block_code in self.seen_block_codes_in_file:
+            self._register_error(CIFParsingErrorType.DUPLICATE_BLOCK_CODE)
+        self.seen_block_codes_in_file[block_code] = SeenCodeInfo(
+            idx=self.curr_token_idx,
+            start=self.curr_match.start(),
+            end=self.curr_match.end(),
+        )
         return
 
     def _process_frame_code(self) -> None:
         """Process frame code token."""
-        if self.curr_token_value == "":
-            # Save frame end directive
-            self.curr_token_type = Token.SAVE_END
-            self.curr_frame_code_category = None
-            self.curr_frame_code_keyword = None
-            return
-        self.curr_token_value = self.curr_token_value.removeprefix("_")
-        frame_code_components = self.curr_token_value.split(".", 1)
-        self.curr_frame_code_category = frame_code_components[0]
-        try:
-            self.curr_frame_code_keyword = frame_code_components[1]
-        except IndexError:
-            self.curr_frame_code_keyword = None
+        frame_code = self.curr_token_value.removeprefix("_")
+        frame_code_components = frame_code.split(".", 1)
+        frame_code_category = frame_code_components[0]
+        frame_code_keyword = frame_code_components[1] if len(frame_code_components) > 1 else None
+
+        # Set current values
+        self.curr_frame_code = frame_code
+        self.curr_frame_code_category = frame_code_category
+        self.curr_frame_code_keyword = frame_code_keyword
+        self.curr_data_name_category = None
+        self.curr_data_name_keyword = None
+        self.curr_data_value = None
+
+        # Update seen codes trackers
+        if frame_code in self.seen_frame_codes_in_block:
+            self._register_error(CIFParsingErrorType.DUPLICATE)
+        self.seen_frame_codes_in_block[frame_code] = SeenCodeInfo(
+            idx=self.curr_token_idx,
+            start=self.curr_match.start(),
+            end=self.curr_match.end(),
+        )
         return
 
-    def _process_loop_directive(self) -> None:
+    def _process_frame_end(self) -> None:
+        """Process frame end token."""
+        self.curr_frame_code = None
+        self.curr_frame_code_category = None
+        self.curr_frame_code_keyword = None
+        return
+
+    def _process_loop(self) -> None:
         """Process loop directive token."""
         if self.curr_token_value != "":
             self._register_error(CIFParsingErrorType.LOOP_HAS_NAME)
         return
 
-    def _process_data_name(self) -> None:
+    def _process_name(self) -> None:
         """Process data name token."""
         name_components = self.curr_token_value.split(".", 1)
         self.curr_data_name_category = name_components[0]
@@ -262,24 +325,24 @@ class CIFParser:
             self.curr_data_name_keyword = None
         return
 
-    def _process_data_value(self) -> None:
+    def _process_value(self) -> None:
         """Process data value token."""
         self.curr_data_value = self.curr_token_value
         return
 
-    def _process_data_value_quoted(self) -> None:
+    def _process_value_quoted(self) -> None:
         """Process quoted data value token."""
         self.curr_data_value = self.curr_token_value
         self.curr_token_type = Token.VALUE
         return
 
-    def _process_data_value_double_quoted(self) -> None:
+    def _process_value_double_quoted(self) -> None:
         """Process double-quoted data value token."""
         self.curr_data_value = self.curr_token_value
         self.curr_token_type = Token.VALUE
         return
 
-    def _process_data_value_text_field(self) -> None:
+    def _process_value_text_field(self) -> None:
         """Process text field data value token.
 
         Notes
@@ -314,7 +377,7 @@ class CIFParser:
         ------
         CIFParsingError
         """
-        self.errors.append(CIFParsingError(parser_instance=self, error_type=error_type))
+        self.errors.append(CIFParsingError(parser=self, error_type=error_type))
         return
 
     # State Update Actions
@@ -330,7 +393,7 @@ class CIFParser:
             self._register_error(CIFParsingErrorType.UNEXPECTED_TOKEN)
         return
 
-    def _do_nothing(self):
+    def _noop(self):
         """No operation."""
         return
 
