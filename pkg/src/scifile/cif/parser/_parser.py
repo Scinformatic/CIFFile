@@ -108,7 +108,6 @@ class CIFParser:
     def __init__(self):
         self._token_processor = {
             Token.VALUE_FIELD: self._process_value_text_field,
-            Token.COMMENT: self._process_comment,
             Token.VALUE_QUOTED: self._process_value_quoted,
             Token.VALUE_DOUBLE_QUOTED: self._process_value_double_quoted,
             Token.NAME: self._process_name,
