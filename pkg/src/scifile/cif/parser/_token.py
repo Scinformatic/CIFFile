@@ -24,21 +24,21 @@ class Token(Enum):
     The values correspond to the index of capturing groups in `TOKENIZER` below.
     """
 
-    VALUE_FIELD = 1  # Will be changed to `VALUE` after processing by parser
+    VALUE_FIELD = 1
     COMMENT = 2
-    VALUE_QUOTED = 3  # Will be changed to `VALUE` after processing by parser
-    VALUE_DOUBLE_QUOTED = 4  # Will be changed to `VALUE` after processing by parser
+    VALUE_QUOTED = 3
+    VALUE_DOUBLE_QUOTED = 4
     NAME = 5
     LOOP = 6
-    DATA = 7
-    SAVE = 8
-    STOP = 9
-    GLOBAL = 10
-    FRAME_REF = 11
-    BRACKETS = 12
-    VALUE = 13
-    BAD_TOKEN = 14
-    SAVE_END = 15  # Will be added by the parser after processing `SAVE`
+    FRAME_CODE = 7
+    FRAME_END = 8
+    BLOCK_CODE = 9
+    STOP = 10
+    GLOBAL = 11
+    FRAME_REF = 12
+    BRACKETS = 13
+    VALUE = 14
+    BAD_TOKEN = 15
 
 
 TOKENIZER = re.compile(
@@ -50,22 +50,22 @@ TOKENIZER = re.compile(
     # The following creates different capturing groups (enumerated starting from 1),
     #  each matching one token type. Notice the order of groups matters,
     #  since the matching terminates with the first group match.
-    ^;([\S\s]*?)(?:\r\n|\s)^;(?:(?=\s)|$)  # 1. Text field, i.e. a non-simple data value
-                                           #    bounded between two '\n;' characters.
+    ^;([\S\s]*?)(?:\r\n|\s)^;(?:(?=\s)|$)  # 1. Text field, i.e. a non-simple data value bounded between two '<eol>;' characters.
     |(?:^|(?<=\s))\#(.*?)\r?$              # 2. Comment
     |(?:^|(?<=\s))(?:
       '(.*?)'                              # 3. Quoted data value
-      |"(.*?)"                             # 4. Duble-quoted data value
+      |"(.*?)"                             # 4. Double-quoted data value
       |_(\S*)                              # 5. Data name
       |loop_(\S*)                          # 6. Loop header
-      |data_(\S*)                          # 7. Block code
-      |save_(\S*)                          # 8. Frame code (or terminator)
-      |stop_(\S*)                          # 9. STAR-reserved loop terminator
-      |global_(\S*)                        # 10. STAR-reserved global block header
-      |\$(\S+)                             # 11. STAR-reserved frame reference
-      |\[(.+?)]                            # 12. STAR-reserved multi-line value delimeter
-      |((?:[^'";_$\[\s]|(?<!^);)\S*)       # 13. Data value
-      |(\S+)                               # 14. Bad token (anything else)
+      |save_(\S+)                          # 7. Frame code
+      |save_()                             # 8. Frame end
+      |data_(\S*)                          # 9. Block code
+      |stop_(\S*)                          # 10. STAR-reserved loop terminator
+      |global_(\S*)                        # 11. STAR-reserved global block header
+      |\$(\S+)                             # 12. STAR-reserved frame reference
+      |\[(.+?)]                            # 13. STAR-reserved multi-line value delimeter
+      |((?:[^'";_$\[\s]|(?<!^);)\S*)       # 14. Data value
+      |(\S+)                               # 15. Bad token (anything else)
     )
     (?:(?=\s)|$)"""
 )
