@@ -73,19 +73,19 @@ class CIFToDictParser(CIFParser):
     def __init__(self):
         super().__init__()
 
-        self._block_codes: list[str] = list()
-        self._frame_code_categories: list[str | None] = list()
-        self._frame_code_keywords: list[str | None] = list()
-        self._data_name_categories: list[str] = list()
-        self._data_name_keywords: list[str] = list()
-        self._data_values: list[list[str]] = list()
-        self._loop_id: list[int] = list()
+        self._block_codes: list[str] = []
+        self._frame_code_categories: list[str | None] = []
+        self._frame_code_keywords: list[str | None] = []
+        self._data_name_categories: list[str | None] = []
+        self._data_name_keywords: list[str | None] = []
+        self._data_values: list[list[str]] = []
+        self._loop_id: list[int] = []
 
         self._loop_value_lists: itertools.cycle = None
         self._loop_value_lists_idx: itertools.cycle = None
 
         self._curr_loop_id: int = 0
-        self._curr_loop_columns: list[list[str]] = list()
+        self._curr_loop_columns: list[list[str]] = []
         return
 
     # Implementation of abstract methods from CIFParser
