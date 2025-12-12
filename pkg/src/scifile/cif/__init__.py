@@ -17,7 +17,7 @@ Other Python packages with mmCIF support:
 - [Biotite](https://github.com/biotite-dev/biotite/tree/master/src/biotite/structure/io/pdbx)
 """
 
-from .read import read
+from .reader import read
 
 __all__ = [
     "read",
