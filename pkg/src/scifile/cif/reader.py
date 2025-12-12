@@ -26,5 +26,5 @@ def read(
         )
 
 
-    cif = CIFFile(df=df)
+    cif = CIFFile(content=df)
     return cif
