@@ -2,7 +2,8 @@
 
 from scifile.typing import FileLike
 from scifile._util import filelike_to_str
-from ._parser_todict import CIFToDictParser, CIFFlatDict
+from ._parser import CIFParser
+from ._output import CIFFlatDict
 from ._exception import CIFParsingError
 
 __all__ = [
@@ -29,4 +30,4 @@ def parse(file: FileLike, encoding: str = "utf-8") -> tuple[CIFFlatDict, list[CI
         and a list of parsing errors encountered during parsing.
     """
     file_content: str = filelike_to_str(file, encoding=encoding)
-    return CIFToDictParser().parse(file_content)
+    return CIFParser().parse(file_content)
