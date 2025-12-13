@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 from ._token import Token
@@ -21,18 +21,18 @@ __all__ = [
 
 class CIFParsingErrorType(Enum):
     """Types of errors that may occur during parsing."""
-    BLOCK_CODE_DUPLICATE = 1
-    FRAME_CODE_DUPLICATE = 1
-    BLOCK_CODE_EMPTY = 2
-    FRAME_CODE_EMPTY = 2
-    DATA_NAME_EMPTY = 2
-    DATA_NAME_DUPLICATE = 3
-    TABLE_INCOMPLETE = 2
-    TOKEN_BAD = 2
-    TOKEN_RESERVED = 2
-    TOKEN_UNEXPECTED = 2
-    LOOP_NAMED = 3
-    FILE_INCOMPLETE = 2
+    BLOCK_CODE_DUPLICATE = auto()
+    FRAME_CODE_DUPLICATE = auto()
+    BLOCK_CODE_EMPTY = auto()
+    FRAME_CODE_EMPTY = auto()
+    DATA_NAME_EMPTY = auto()
+    DATA_NAME_DUPLICATE = auto()
+    TABLE_INCOMPLETE = auto()
+    TOKEN_BAD = auto()
+    TOKEN_RESERVED = auto()
+    TOKEN_UNEXPECTED = auto()
+    LOOP_NAMED = auto()
+    FILE_INCOMPLETE = auto()
 
 
 class CIFParsingError(Exception):
