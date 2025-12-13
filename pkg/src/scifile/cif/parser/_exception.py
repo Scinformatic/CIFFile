@@ -14,12 +14,12 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "CIFParsingError",
-    "CIFParsingErrorType",
+    "CIFFileParseError",
+    "CIFFileParseErrorType",
 ]
 
 
-class CIFParsingErrorType(Enum):
+class CIFFileParseErrorType(Enum):
     """Types of errors that may occur during parsing."""
     BLOCK_CODE_DUPLICATE = auto()
     FRAME_CODE_DUPLICATE = auto()
@@ -36,10 +36,10 @@ class CIFParsingErrorType(Enum):
     FILE_INCOMPLETE = auto()
 
 
-class CIFParsingError(Exception):
+class CIFFileParseError(Exception):
     def __init__(
         self,
-        error_type: CIFParsingErrorType,
+        error_type: CIFFileParseErrorType,
         *,
         state: State,
         token_idx: int,
@@ -90,8 +90,8 @@ class CIFParsingError(Exception):
                 self.address_path += f", save frame 'save_{self.frame_code}'"
 
         error_handler = getattr(self, f"_msg_{error_type.name.lower()}")
-        self.error_msg = error_handler()
-        super().__init__(self.error_msg)
+        self.message = error_handler()
+        super().__init__(self.message)
         return
 
     def _msg_block_code_duplicate(self) -> str:
