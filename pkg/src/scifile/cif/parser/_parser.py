@@ -65,7 +65,7 @@ stateDiagram-v2
 import itertools
 import re
 from collections.abc import Iterator
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 from ._exception import CIFParsingError, CIFParsingErrorType
 from ._output import CIFFlatDict
@@ -102,7 +102,7 @@ class CIFParser:
       final validation is delegated to caller.
     """
 
-    def __init__(self):
+    def __init__(self, file: str):
         self._token_processor = {
             Token.VALUE_FIELD: self._process_value_text_field,
             Token.VALUE_QUOTED: self._process_value_quoted,
@@ -167,191 +167,160 @@ class CIFParser:
         """
 
         # Parser state variables
-        self.file_content: str = ""
-        self.tokenizer: Iterator[re.Match] = None
+        self._file: str = file
+        self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(self._file)
 
-        self.curr_state: State = State.IN_FILE
-        self.curr_token_idx: int = 0
-        self.curr_match: re.Match = None
-        self.curr_token_type: Token = Token.BAD_TOKEN
-        self.curr_token_value: str = ""
+        self._curr_state: State = State.IN_FILE
+        self._curr_token_idx: int = 0
+        self._curr_match: re.Match = None
+        self._curr_token_type: Token = Token.BAD_TOKEN
+        self._curr_token_value: str = ""
 
         # Current address in the CIF structure and values being processed
-        self.curr_block_code: str | None = None
-        self.curr_frame_code: str | None = None
-        self.curr_frame_code_category: str | None = None
-        self.curr_frame_code_keyword: str | None = None
-        self.curr_data_name_category: str | None = None
-        self.curr_data_name_keyword: str | None = None
-        self.curr_data_value: str | None = None
+        self._curr_block_code: str | None = None
+        self._curr_frame_code: str | None = None
+        self._curr_data_name: str | None = None
+        self._curr_data_value: str | None = None
 
-        self.seen_block_codes_in_file: dict[str, SeenCodeInfo] = {}
-        self.seen_frame_codes_in_block: dict[str, SeenCodeInfo] = {}
+        self._seen_block_codes_in_file: dict[str, SeenCodeInfo] = {}
+        self._seen_frame_codes_in_block: dict[str, SeenCodeInfo] = {}
 
-        self.errors: list[CIFParsingError] = []
-
-        self._block_codes: list[str] = []
-        self._frame_code_categories: list[str | None] = []
-        self._frame_code_keywords: list[str | None] = []
-        self._data_name_categories: list[str | None] = []
-        self._data_name_keywords: list[str | None] = []
-        self._data_values: list[list[str]] = []
-        self._loop_id: list[int] = []
+        self._output_block_codes: list[str] = []
+        self._output_frame_codes: list[str | None] = []
+        self._output_data_names: list[str | None] = []
+        self._output_data_values: list[list[str]] = []
+        self._output_loop_id: list[int] = []
 
         self._loop_value_lists: itertools.cycle = None
         self._loop_value_lists_idx: itertools.cycle = None
 
         self._curr_loop_id: int = 0
         self._curr_loop_columns: list[list[str]] = []
+
+        # Public attributes
+        self.errors: list[CIFParsingError] = []
+        self.output: CIFFlatDict = self._parse()
         return
 
-    # Public Methods
-    # ==============
+    # Private Methods
+    # ===============
 
-    def parse(self, content: str) -> tuple[Any, list[CIFParsingError]]:
-        # Reset parser state variables
-        self.file_content = content
-        self.tokenizer = TOKENIZER.finditer(self.file_content)
-
-        self.curr_state = State.IN_FILE
-        self.curr_token_idx = 0
-        self.curr_match = None
-        self.curr_token_type = Token.BAD_TOKEN
-        self.curr_token_value = None
-
-        self.curr_block_code = None
-        self.curr_frame_code = None
-        self.curr_frame_code_category = None
-        self.curr_frame_code_keyword = None
-        self.curr_data_name_category = None
-        self.curr_data_name_keyword = None
-        self.curr_data_value = None
-
-        self.seen_block_codes_in_file = {}
-        self.seen_frame_codes_in_block = {}
-
-        self.errors = []
-
+    def _parse(self) -> CIFFlatDict:
         # Loop over tokens
-        for self.curr_token_idx, self.curr_match in enumerate(self.tokenizer):
-            self.curr_token_type = Token(self.curr_match.lastindex)
-            self.curr_token_value = self.curr_match.group(self.curr_match.lastindex)
+        for self._curr_token_idx, self._curr_match in enumerate(self._tokenizer):
+            self._curr_token_type = Token(self._curr_match.lastindex)
+            self._curr_token_value = self._curr_match.group(self._curr_match.lastindex)
 
             # Process/normalize token
-            processor_func = self._token_processor.get(self.curr_token_type, self._noop)
+            processor_func = self._token_processor.get(self._curr_token_type, self._noop)
             processor_func()
 
             # Store values and update state
             update_func, new_state = self._state_mapper.get(
-                (self.curr_state, self.curr_token_type), (self._wrong_token, self.curr_state)
+                (self._curr_state, self._curr_token_type), (self._wrong_token, self._curr_state)
             )
             update_func()
-            self.curr_state = new_state
+            self._curr_state = new_state
 
         # Finalize parsing, performing any necessary checks.
-        if self.curr_state in (State.IN_LOOP_VALUE, State.IN_SAVE_LOOP_VALUE):
+        if self._curr_state in (State.IN_LOOP_VALUE, State.IN_SAVE_LOOP_VALUE):
             # End of file reached while in a loop; finalize loop
             self._finalize_loop()
-        elif self.curr_state not in (State.IN_DATA, State.IN_SAVE):
+        elif self._curr_state not in (State.IN_DATA, State.IN_SAVE):
             # End of file reached in an invalid state
             self._register_error(CIFParsingErrorType.FILE_INCOMPLETE)
-        return self._return_data(), self.errors
 
-    # Private Methods
-    # ===============
+        output = CIFFlatDict(
+            block_code=self._output_block_codes,
+            frame_code=self._output_frame_codes,
+            loop_code=self._output_loop_id,
+            data_name=self._output_data_names,
+            data_values=self._output_data_values,
+        )
+        return output
 
     # Token Processors
     # ----------------
 
     def _process_block_code(self) -> None:
         """Process block code token."""
-        block_code = self.curr_token_value
+        block_code = self._curr_token_value
         if block_code == "":
             self._register_error(CIFParsingErrorType.BLOCK_CODE_EMPTY)
 
         # Set current values
-        self.curr_block_code = block_code
-        self.curr_frame_code = None
-        self.curr_frame_code_category = None
-        self.curr_frame_code_keyword = None
-        self.curr_data_name_category = None
-        self.curr_data_name_keyword = None
-        self.curr_data_value = None
+        self._curr_block_code = block_code
+        self._curr_frame_code = None
+        self._curr_data_name = None
+        self._curr_data_value = None
 
         # Update seen codes trackers
-        self.seen_frame_codes_in_block = {}
-        if block_code in self.seen_block_codes_in_file:
+        self._seen_frame_codes_in_block = {}
+        if block_code in self._seen_block_codes_in_file:
             self._register_error(CIFParsingErrorType.BLOCK_CODE_DUPLICATE)
-        self.seen_block_codes_in_file[block_code] = SeenCodeInfo(
-            idx=self.curr_token_idx,
-            start=self.curr_match.start(),
-            end=self.curr_match.end(),
+        self._seen_block_codes_in_file[block_code] = SeenCodeInfo(
+            idx=self._curr_token_idx,
+            start=self._curr_match.start(),
+            end=self._curr_match.end(),
         )
         return
 
     def _process_frame_code(self) -> None:
         """Process frame code token."""
-        frame_code = self.curr_token_value.removeprefix("_")
-        frame_code_components = frame_code.split(".", 1)
-        frame_code_category = frame_code_components[0]
-        frame_code_keyword = frame_code_components[1] if len(frame_code_components) > 1 else None
+        frame_code = self._curr_token_value.removeprefix("_")
 
         # Set current values
-        self.curr_frame_code = frame_code
-        self.curr_frame_code_category = frame_code_category
-        self.curr_frame_code_keyword = frame_code_keyword
-        self.curr_data_name_category = None
-        self.curr_data_name_keyword = None
-        self.curr_data_value = None
+        self._curr_frame_code = frame_code
+        self._curr_data_name = None
+        self._curr_data_value = None
 
         # Update seen codes trackers
-        if frame_code in self.seen_frame_codes_in_block:
+        if frame_code in self._seen_frame_codes_in_block:
             self._register_error(CIFParsingErrorType.FRAME_CODE_DUPLICATE)
-        self.seen_frame_codes_in_block[frame_code] = SeenCodeInfo(
-            idx=self.curr_token_idx,
-            start=self.curr_match.start(),
-            end=self.curr_match.end(),
+        self._seen_frame_codes_in_block[frame_code] = SeenCodeInfo(
+            idx=self._curr_token_idx,
+            start=self._curr_match.start(),
+            end=self._curr_match.end(),
         )
         return
 
     def _process_frame_end(self) -> None:
         """Process frame end token."""
-        self.curr_frame_code = None
-        self.curr_frame_code_category = None
-        self.curr_frame_code_keyword = None
+        self._curr_frame_code = None
         return
 
     def _process_loop(self) -> None:
         """Process loop directive token."""
-        if self.curr_token_value != "":
+        if self._curr_token_value != "":
             self._register_error(CIFParsingErrorType.LOOP_NAMED)
         return
 
     def _process_name(self) -> None:
         """Process data name token."""
-        name_components = self.curr_token_value.split(".", 1)
-        self.curr_data_name_category = name_components[0]
-        try:
-            self.curr_data_name_keyword = name_components[1]
-        except IndexError:
-            self.curr_data_name_keyword = None
+        data_name = self._curr_token_value
+        if data_name == "":
+            self._register_error(CIFParsingErrorType.DATA_NAME_EMPTY)
+
+        # Set current values
+        self._curr_data_name = data_name
+        self._curr_data_value = None
         return
 
     def _process_value(self) -> None:
         """Process data value token."""
-        self.curr_data_value = self.curr_token_value
+        self._curr_data_value = self._curr_token_value
         return
 
     def _process_value_quoted(self) -> None:
         """Process quoted data value token."""
-        self.curr_data_value = self.curr_token_value
-        self.curr_token_type = Token.VALUE
+        self._curr_data_value = self._curr_token_value
+        self._curr_token_type = Token.VALUE
         return
 
     def _process_value_double_quoted(self) -> None:
         """Process double-quoted data value token."""
-        self.curr_data_value = self.curr_token_value
-        self.curr_token_type = Token.VALUE
+        self._curr_data_value = self._curr_token_value
+        self._curr_token_type = Token.VALUE
         return
 
     def _process_value_text_field(self) -> None:
@@ -364,10 +333,58 @@ class CIFParser:
         leading white space within text lines must be retained as part of the data value;
         trailing white space on a line may however be elided."
         """
-        lines = self.curr_token_value.splitlines()
+        lines = self._curr_token_value.splitlines()
         lines_processed = [line.rstrip() for line in lines]
-        self.curr_data_value = "\n".join(lines_processed)
-        self.curr_token_type = Token.VALUE
+        self._curr_data_value = "\n".join(lines_processed)
+        self._curr_token_type = Token.VALUE
+        return
+
+    # State Update Actions
+    # --------------------
+
+    def _add_data_item(self):
+        self._add_data(data_value=[self._curr_data_value], loop_id=0)
+        return
+
+    def _initialize_loop(self):
+        self._curr_loop_id += 1
+        self._curr_loop_columns = []
+        self._add_loop_keyword()
+        return
+
+    def _add_loop_keyword(self):
+        new_column = []
+        self._curr_loop_columns.append(new_column)
+        self._add_data(data_value=new_column, loop_id=self._curr_loop_id)
+        return
+
+    def _register_and_fill_loop(self):
+        self._register_loop()
+        self._fill_loop_value()
+        return
+
+    def _fill_loop_value(self):
+        next(self._loop_value_lists).append(self._curr_data_value)
+        next(self._loop_value_lists_idx)
+        return
+
+    def _finalize_loop(self):
+        if next(self._loop_value_lists_idx) != 0:
+            self._register_error(CIFParsingErrorType.TABLE_INCOMPLETE)
+        return
+
+    def _wrong_token(self) -> None:
+        """Handle unexpected or bad token."""
+        if self._curr_token_type == Token.BAD_TOKEN:
+            self._register_error(CIFParsingErrorType.TOKEN_BAD)
+        elif self._curr_token_type in [Token.STOP, Token.GLOBAL, Token.FRAME_REF, Token.BRACKETS]:
+            self._register_error(CIFParsingErrorType.TOKEN_RESERVED)
+        else:
+            self._register_error(CIFParsingErrorType.TOKEN_UNEXPECTED)
+        return
+
+    def _noop(self):
+        """No operation."""
         return
 
     # State Error Handler
@@ -389,82 +406,37 @@ class CIFParser:
         ------
         CIFParsingError
         """
-        self.errors.append(CIFParsingError(parser=self, error_type=error_type))
-        return
-
-    # State Update Actions
-    # --------------------
-
-    def _wrong_token(self) -> None:
-        """Handle unexpected or bad token."""
-        if self.curr_token_type == Token.BAD_TOKEN:
-            self._register_error(CIFParsingErrorType.TOKEN_BAD)
-        elif self.curr_token_type in [Token.STOP, Token.GLOBAL, Token.FRAME_REF, Token.BRACKETS]:
-            self._register_error(CIFParsingErrorType.TOKEN_RESERVED)
-        else:
-            self._register_error(CIFParsingErrorType.TOKEN_UNEXPECTED)
-        return
-
-    def _noop(self):
-        """No operation."""
-        return
-
-    # Abstract methods to be implemented by subclasses
-
-    def _add_data_item(self):
-        self._add_data(data_value=[self.curr_data_value], loop_id=0)
-        return
-
-    def _initialize_loop(self):
-        self._curr_loop_id += 1
-        self._curr_loop_columns = []
-        self._add_loop_keyword()
-        return
-
-    def _add_loop_keyword(self):
-        new_column = []
-        self._curr_loop_columns.append(new_column)
-        self._add_data(data_value=new_column, loop_id=self._curr_loop_id)
-        return
-
-    def _register_and_fill_loop(self):
-        self._register_loop()
-        self._fill_loop_value()
-        return
-
-    def _fill_loop_value(self):
-        next(self._loop_value_lists).append(self.curr_data_value)
-        next(self._loop_value_lists_idx)
-        return
-
-    def _finalize_loop(self):
-        if next(self._loop_value_lists_idx) != 0:
-            self._register_error(CIFParsingErrorType.TABLE_INCOMPLETE)
-        return
-
-    def _return_data(self) -> CIFFlatDict:
-        flat_dict = CIFFlatDict(
-            block_code=self._block_codes,
-            frame_code_category=self._frame_code_categories,
-            frame_code_keyword=self._frame_code_keywords,
-            data_name_category=self._data_name_categories,
-            data_name_keyword=self._data_name_keywords,
-            data_values=self._data_values,
-            loop_id=self._loop_id,
+        error = CIFParsingError(
+            error_type=error_type,
+            state=self._curr_state,
+            token_idx=self._curr_token_idx,
+            match=self._curr_match,
+            token_type=self._curr_token_type,
+            token_value=self._curr_token_value,
+            block_code=self._curr_block_code,
+            frame_code=self._curr_frame_code,
+            frame_code_category=self._curr_frame_code_category,
+            frame_code_keyword=self._curr_frame_code_keyword,
+            data_name_category=self._curr_data_name_category,
+            data_name_keyword=self._curr_data_name_keyword,
+            data_value=self._curr_data_value,
+            seen_block_codes=self._seen_block_codes_in_file.copy(),
+            seen_frame_codes=self._seen_frame_codes_in_block.copy(),
         )
-        return flat_dict
+        self.errors.append(error)
+        return
 
-    # Private Methods
-    # ===============
+    # Private Helper Methods
+    # ======================
 
     def _add_data(self, data_value: str | list, loop_id: int):
-        self._block_codes.append(self.curr_block_code)
-        self._frame_code_categories.append(self.curr_frame_code_category)
-        self._frame_code_keywords.append(self.curr_frame_code_keyword)
-        self._data_name_categories.append(self.curr_data_name_category)
-        self._data_name_keywords.append(self.curr_data_name_keyword)
-        self._data_values.append(data_value)
-        self._loop_id.append(loop_id)
+        self._output_block_codes.append(self._curr_block_code)
+        self._output_frame_code_categories.append(self._curr_frame_code_category)
+        self._output_frame_code_keywords.append(self._curr_frame_code_keyword)
+        self._output_data_name_categories.append(self._curr_data_name_category)
+        self._output_data_name_keywords.append(self._curr_data_name_keyword)
+        self._output_data_values.append(data_value)
+        self._output_loop_id.append(loop_id)
         return
 
     def _register_loop(self):
