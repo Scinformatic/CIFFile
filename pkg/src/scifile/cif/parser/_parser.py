@@ -69,7 +69,7 @@ from typing import NamedTuple, Literal
 
 from scifile._util import filelike_to_str
 from scifile.typing import FileLike
-from ._exception import CIFParsingError, CIFParsingErrorType
+from ._exception import CIFFileParseError, CIFFileParseErrorType
 from ._output import CIFFlatDict
 from ._token import Token, TOKENIZER
 from ._state import State
@@ -206,7 +206,7 @@ class CIFParser:
         self._curr_loop_columns: list[list[str]] = []
 
         # Public attributes
-        self.errors: list[CIFParsingError] = []
+        self.errors: list[CIFFileParseError] = []
         self.output: CIFFlatDict = self._parse()
 
         return
@@ -240,7 +240,7 @@ class CIFParser:
             self._end_loop()
         elif self._curr_state not in (State.IN_DATA, State.IN_SAVE):
             # End of file reached in an invalid state
-            self._register_error(CIFParsingErrorType.FILE_INCOMPLETE)
+            self._register_error(CIFFileParseErrorType.FILE_INCOMPLETE)
 
         output = CIFFlatDict(
             block_code=self._output_block_codes,
@@ -270,9 +270,9 @@ class CIFParser:
         self._seen_data_names_in_frame = {}
 
         if block_code == "":
-            self._register_error(CIFParsingErrorType.BLOCK_CODE_EMPTY)
+            self._register_error(CIFFileParseErrorType.BLOCK_CODE_EMPTY)
         if block_code in self._seen_block_codes_in_file:
-            self._register_error(CIFParsingErrorType.BLOCK_CODE_DUPLICATE)
+            self._register_error(CIFFileParseErrorType.BLOCK_CODE_DUPLICATE)
 
         self._seen_block_codes_in_file[block_code] = SeenCodeInfo(
             idx=self._curr_token_idx,
@@ -294,9 +294,9 @@ class CIFParser:
         self._seen_data_names_in_frame = {}
 
         if frame_code == "":
-            self._register_error(CIFParsingErrorType.FRAME_CODE_EMPTY)
+            self._register_error(CIFFileParseErrorType.FRAME_CODE_EMPTY)
         if frame_code in self._seen_frame_codes_in_block:
-            self._register_error(CIFParsingErrorType.FRAME_CODE_DUPLICATE)
+            self._register_error(CIFFileParseErrorType.FRAME_CODE_DUPLICATE)
 
         self._seen_frame_codes_in_block[frame_code] = SeenCodeInfo(
             idx=self._curr_token_idx,
@@ -316,7 +316,7 @@ class CIFParser:
         self._curr_loop_columns = []
 
         if loop_code != "":
-            self._register_error(CIFParsingErrorType.LOOP_NAMED)
+            self._register_error(CIFFileParseErrorType.LOOP_NAMED)
         return
 
     def _new_name_in_data_block(self) -> None:
@@ -355,7 +355,7 @@ class CIFParser:
 
     def _end_loop(self):
         if next(self._loop_value_lists_idx) != 0:
-            self._register_error(CIFParsingErrorType.TABLE_INCOMPLETE)
+            self._register_error(CIFFileParseErrorType.TABLE_INCOMPLETE)
         return
 
     def _end_save_frame(self) -> None:
@@ -370,11 +370,11 @@ class CIFParser:
     def _wrong_token(self) -> None:
         """Handle unexpected or bad token."""
         if self._curr_token_type == Token.BAD_TOKEN:
-            self._register_error(CIFParsingErrorType.TOKEN_BAD)
+            self._register_error(CIFFileParseErrorType.TOKEN_BAD)
         elif self._curr_token_type in [Token.STOP, Token.GLOBAL, Token.FRAME_REF, Token.BRACKETS]:
-            self._register_error(CIFParsingErrorType.TOKEN_RESERVED)
+            self._register_error(CIFFileParseErrorType.TOKEN_RESERVED)
         else:
-            self._register_error(CIFParsingErrorType.TOKEN_UNEXPECTED)
+            self._register_error(CIFFileParseErrorType.TOKEN_UNEXPECTED)
         return
 
     # Token Processors
@@ -409,7 +409,7 @@ class CIFParser:
     # State Error Handler
     # -------------------
 
-    def _register_error(self, error_type: CIFParsingErrorType) -> None:
+    def _register_error(self, error_type: CIFFileParseErrorType) -> None:
         """
         Given an error type, raise it as a `CIFParsingError` or post a warning message,
         depending on the level of `strictness` and the error level.
@@ -425,7 +425,7 @@ class CIFParser:
         ------
         CIFParsingError
         """
-        error = CIFParsingError(
+        error = CIFFileParseError(
             error_type=error_type,
             state=self._curr_state,
             token_idx=self._curr_token_idx,
@@ -460,14 +460,14 @@ class CIFParser:
         self._curr_data_value = None
 
         if data_name == "":
-            self._register_error(CIFParsingErrorType.DATA_NAME_EMPTY)
+            self._register_error(CIFFileParseErrorType.DATA_NAME_EMPTY)
         if self._variant == "mmcif":
             period_count = data_name.count(".")
             if period_count != 1:
-                self._register_error(CIFParsingErrorType.DATA_NAME_NOT_MMCIF)
+                self._register_error(CIFFileParseErrorType.DATA_NAME_NOT_MMCIF)
 
         if data_name in seen_names:
-            self._register_error(CIFParsingErrorType.DATA_NAME_DUPLICATE)
+            self._register_error(CIFFileParseErrorType.DATA_NAME_DUPLICATE)
         seen_names[data_name] = SeenCodeInfo(
             idx=self._curr_token_idx,
             start=self._curr_match.start(),
