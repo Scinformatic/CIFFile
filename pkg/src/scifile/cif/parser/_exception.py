@@ -27,6 +27,7 @@ class CIFParsingErrorType(Enum):
     FRAME_CODE_EMPTY = auto()
     DATA_NAME_EMPTY = auto()
     DATA_NAME_DUPLICATE = auto()
+    DATA_NAME_NOT_MMCIF = auto()
     TABLE_INCOMPLETE = auto()
     TOKEN_BAD = auto()
     TOKEN_RESERVED = auto()
@@ -88,12 +89,12 @@ class CIFParsingError(Exception):
             if self.frame_code is not None:
                 self.address_path += f", save frame 'save_{self.frame_code}'"
 
-        error_handler = getattr(self, f"_{error_type.name.lower()}")
+        error_handler = getattr(self, f"_msg_{error_type.name.lower()}")
         self.error_msg = error_handler()
         super().__init__(self.error_msg)
         return
 
-    def _block_code_duplicate(self) -> str:
+    def _msg_block_code_duplicate(self) -> str:
         """Generate error message and data for duplicated block code error."""
         self.seen = seen = self.seen_block_codes[self.block_code]
         error_msg = (
@@ -104,7 +105,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _frame_code_duplicate(self) -> str:
+    def _msg_frame_code_duplicate(self) -> str:
         """Generate error message and data for duplicated frame code error."""
         self.seen = seen = self.seen_frame_codes[self.frame_code]
         error_msg = (
@@ -116,7 +117,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _block_code_empty(self) -> str:
+    def _msg_block_code_empty(self) -> str:
         """Generate error message and data for empty block code error."""
         error_msg = (
             "Empty block code: "
@@ -124,7 +125,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _frame_code_empty(self) -> str:
+    def _msg_frame_code_empty(self) -> str:
         """Generate error message and data for empty frame code error."""
         error_msg = (
             "Empty frame code: "
@@ -133,7 +134,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _data_name_empty(self) -> str:
+    def _msg_data_name_empty(self) -> str:
         """Generate error message and data for empty data name error."""
         error_msg = (
             "Empty data name: "
@@ -141,7 +142,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _data_name_duplicate(self) -> str:
+    def _msg_data_name_duplicate(self) -> str:
         """Generate error message and data for duplicated data name error."""
         seen_codes = (
             self.seen_data_names_in_frame
@@ -157,7 +158,17 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _table_incomplete(self) -> str:
+    def _msg_data_name_not_mmcif(self) -> str:
+        """Generate error message and data for non-mmcif data name error."""
+        error_msg = (
+            "Non-mmcif data name: "
+            f"The data name '_{self.data_name}' {self.address_path}, {self.address_index} "
+            f"is not valid in mmCIF format. "
+            f"mmCIF data names must contain exactly one period ('.') character."
+        )
+        return error_msg
+
+    def _msg_table_incomplete(self) -> str:
         """Generate error message and data for incomplete table error."""
         error_msg = (
             "Incomplete table: "
@@ -167,7 +178,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _token_bad(self) -> str:
+    def _msg_token_bad(self) -> str:
         """Generate error message and data for bad token error."""
         error_msg = (
             "Bad token: "
@@ -176,7 +187,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _token_reserved(self) -> str:
+    def _msg_token_reserved(self) -> str:
         """Generate error message and data for reserved token error."""
         error_msg = (
             "Reserved token: "
@@ -186,7 +197,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _token_unexpected(self) -> str:
+    def _msg_token_unexpected(self) -> str:
         """Generate error message and data for unexpected token error."""
         expected_tokens = self.expected_tokens
         error_msg = (
@@ -199,7 +210,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _loop_named(self) -> str:
+    def _msg_loop_named(self) -> str:
         """Generate error message and data for named loop error."""
         error_msg = (
             "Named loop: "
@@ -209,7 +220,7 @@ class CIFParsingError(Exception):
         )
         return error_msg
 
-    def _file_incomplete(self) -> str:
+    def _msg_file_incomplete(self) -> str:
         """Generate error message and data for incomplete file error."""
         error_msg = (
             "Incomplete file: "
