@@ -30,4 +30,5 @@ def parse(file: FileLike, encoding: str = "utf-8") -> tuple[CIFFlatDict, list[CI
         and a list of parsing errors encountered during parsing.
     """
     file_content: str = filelike_to_str(file, encoding=encoding)
-    return CIFParser().parse(file_content)
+    parser = CIFParser(file_content)
+    return parser.output, parser.errors
