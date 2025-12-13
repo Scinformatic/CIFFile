@@ -105,6 +105,12 @@ class CIFParser:
     def __init__(self, file: str):
         NOOP = lambda: None
 
+        self._token_preprocessors = {
+            Token.VALUE_FIELD: self._process_value_text_field,
+            Token.VALUE_QUOTED: self._process_value_quoted,
+            Token.VALUE_DOUBLE_QUOTED: self._process_value_double_quoted,
+        }
+
         self._state_mapper = {
             (State.IN_FILE, Token.BLOCK_CODE):           (NOOP, self._new_data_block, State.JUST_IN_DATA),
             (State.IN_FILE, Token.COMMENT):              (NOOP, NOOP, State.IN_FILE),
@@ -204,6 +210,10 @@ class CIFParser:
         for self._curr_token_idx, self._curr_match in enumerate(self._tokenizer):
             self._curr_token_type = Token(self._curr_match.lastindex)
             self._curr_token_value = self._curr_match.group(self._curr_match.lastindex)
+
+            # Preprocess token if needed
+            preprocessor = self._token_preprocessors.get(self._curr_token_type, NOOP)
+            preprocessor()
 
             # Store values and update state
             curr_state_updater, new_state_updater, new_state = self._state_mapper.get(
@@ -417,6 +427,8 @@ class CIFParser:
             data_value=self._curr_data_value,
             seen_block_codes=self._seen_block_codes_in_file.copy(),
             seen_frame_codes=self._seen_frame_codes_in_block.copy(),
+            seen_data_names_in_block=self._seen_data_names_in_block.copy(),
+            seen_data_names_in_frame=self._seen_data_names_in_frame.copy(),
             expected_tokens=[
                 token for state, token in self._state_mapper.keys()
                 if state == self._curr_state
