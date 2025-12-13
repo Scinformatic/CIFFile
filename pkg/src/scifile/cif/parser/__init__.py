@@ -6,11 +6,11 @@ from scifile.typing import FileLike
 
 from ._parser import CIFParser
 from ._output import CIFFlatDict
-from ._exception import CIFParsingError
+from ._exception import CIFFileParseError
 
 __all__ = [
     "CIFFlatDict",
-    "CIFParsingError",
+    "CIFFileParseError",
     "parse",
 ]
 
@@ -20,7 +20,7 @@ def parse(
     *,
     variant: Literal["cif1", "mmcif"] = "mmcif",
     encoding: str = "utf-8"
-) -> tuple[CIFFlatDict, list[CIFParsingError]]:
+) -> tuple[CIFFlatDict, list[CIFFileParseError]]:
     """Parse a CIF file into a flat dictionary representation.
 
     Parameters
