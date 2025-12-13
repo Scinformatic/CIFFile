@@ -65,8 +65,10 @@ stateDiagram-v2
 import itertools
 import re
 from collections.abc import Iterator
-from typing import NamedTuple
+from typing import NamedTuple, Literal
 
+from scifile._util import filelike_to_str
+from scifile.typing import FileLike
 from ._exception import CIFParsingError, CIFParsingErrorType
 from ._output import CIFFlatDict
 from ._token import Token, TOKENIZER
@@ -102,7 +104,13 @@ class CIFParser:
       final validation is delegated to caller.
     """
 
-    def __init__(self, file: str):
+    def __init__(
+        self,
+        file: FileLike,
+        *,
+        variant: Literal["cif1", "mmcif"] = "mmcif",
+        encoding: str = "utf-8",
+    ) -> None:
         NOOP = lambda: None
 
         self._token_preprocessors = {
@@ -161,10 +169,13 @@ class CIFParser:
         This is a finite state machine that encodes exactly the state diagram shown in the module docstring.
         """
 
-        # Parser state variables
-        self._file: str = file
-        self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(self._file)
+        self._file: FileLike = file
+        self._variant: Literal["cif1", "mmcif"] = variant
+        self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(
+            filelike_to_str(file, encoding=encoding)
+        )
 
+        # Parser state variables
         self._curr_state: State = State.IN_FILE
         self._curr_token_idx: int = 0
         self._curr_match: re.Match = None
@@ -450,6 +461,10 @@ class CIFParser:
 
         if data_name == "":
             self._register_error(CIFParsingErrorType.DATA_NAME_EMPTY)
+        if self._variant == "mmcif":
+            period_count = data_name.count(".")
+            if period_count != 1:
+                self._register_error(CIFParsingErrorType.DATA_NAME_NOT_MMCIF)
 
         if data_name in seen_names:
             self._register_error(CIFParsingErrorType.DATA_NAME_DUPLICATE)
