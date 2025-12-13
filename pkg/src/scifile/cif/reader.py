@@ -1,30 +1,33 @@
 """Read CIF files."""
 
-import polars as pl
+from __future__ import annotations
 
-from scifile.typing import FileLike
+from typing import TYPE_CHECKING
+
 from .parser import parse
 from .structure import CIFFile
+from .exception import CIFFileReadError, CIFFileReadErrorType
+
+if TYPE_CHECKING:
+    from scifile.typing import FileLike
+    from typing import Literal
 
 
 def read(
     file: FileLike,
+    *,
+    variant: Literal["cif1", "mmcif"] = "mmcif",
     encoding: str = "utf-8",
-):
-    columns, parsing_errors = parse(file=file, encoding=encoding)
-    df = pl.DataFrame(
-            columns,
-            {
-                "block_code": pl.Utf8,
-                "frame_code_category": pl.Utf8,
-                "frame_code_keyword": pl.Utf8,
-                "data_name_category": pl.Utf8,
-                "data_name_keyword": pl.Utf8,
-                "data_values": pl.List(pl.Utf8),
-                "loop_id": pl.UInt32,
-            },
+) -> CIFFile:
+    columns, parsing_errors = parse(file=file, variant=variant, encoding=encoding)
+    cif = CIFFile(content=columns)
+    if parsing_errors:
+        raise CIFFileReadError(
+            error_type=CIFFileReadErrorType.PARSING,
+            file=cif,
+            errors=parsing_errors,
+            file_input=file,
+            variant=variant,
+            encoding=encoding,
         )
-
-
-    cif = CIFFile(content=df)
     return cif
