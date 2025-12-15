@@ -18,9 +18,31 @@ def read(
     *,
     variant: Literal["cif1", "mmcif"] = "mmcif",
     encoding: str = "utf-8",
+    raise_level: Literal[0, 1, 2] = 2,
+    col_name_block: str = "block",
+    col_name_frame: str = "frame",
+    col_name_cat: str = "category",
+    col_name_key: str = "keyword",
+    col_name_values: str = "values",
 ) -> CIFFile:
-    columns, parsing_errors = parse(file=file, variant=variant, encoding=encoding)
-    cif = CIFFile(content=columns)
+    columns, parsing_errors = parse(file=file, variant=variant, encoding=encoding, raise_level=raise_level)
+    column_name_map = {
+        "block": col_name_block,
+        "frame": col_name_frame,
+        "category": col_name_cat,
+        "keyword": col_name_key,
+        "values": col_name_values,
+    }
+    cif = CIFFile(
+        content={column_name_map[k]: v for k, v in columns.items()},
+        variant=variant,
+        validate=False,
+        col_name_block=col_name_block,
+        col_name_frame=col_name_frame,
+        col_name_cat=col_name_cat,
+        col_name_key=col_name_key,
+        col_name_values=col_name_values,
+    )
     if parsing_errors:
         raise CIFFileReadError(
             error_type=CIFFileReadErrorType.PARSING,
