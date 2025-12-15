@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 import numpy.typing as npt
+import polars._typing as plt
 
 
 ArrayLike: TypeAlias = npt.ArrayLike
@@ -23,3 +24,7 @@ FileLike: TypeAlias = str | bytes | Path
 
 PathLike: TypeAlias = str | Path
 """A file path, either as a string or a `pathlib.Path` object."""
+
+
+DataFrameLike: TypeAlias = plt.FrameInitTypes
+"""A DataFrame-like input, compatible with Polars DataFrames."""
