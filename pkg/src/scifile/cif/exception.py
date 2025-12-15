@@ -27,7 +27,7 @@ class CIFFileReadErrorType(Enum):
     PARSING = auto()
 
 
-class CIFFileReadError(SciFileError):
+class CIFFileReadError(CIFFileError):
     """Exception raised when a CIF file cannot be read."""
     def __init__(
         self,
@@ -47,6 +47,7 @@ class CIFFileReadError(SciFileError):
         self.encoding = encoding
         error_handler = getattr(self, f"_msg_{error_type.name.lower()}")
         self.message = error_handler()
+        super().__init__(message=self.message)
         return
 
     def _msg_parsing(self) -> str:
