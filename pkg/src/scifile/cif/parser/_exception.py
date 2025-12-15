@@ -29,6 +29,9 @@ class CIFFileParseErrorType(Enum):
     DATA_NAME_DUPLICATE = auto()
     DATA_NAME_NOT_MMCIF = auto()
     TABLE_INCOMPLETE = auto()
+    TABLE_MULTICAT = auto()
+    TABLE_CAT_DUPLICATE = auto()
+    TABLE_CAT_REPEATED = auto()
     TOKEN_BAD = auto()
     TOKEN_RESERVED = auto()
     TOKEN_UNEXPECTED = auto()
@@ -48,12 +51,18 @@ class CIFFileParseError(Exception):
         token_value: str,
         block_code: str | None,
         frame_code: str | None,
+        data_category: str | None,
+        data_keyword: str | None,
         data_name: str | None,
         data_value: str | None,
         seen_block_codes: dict[str, SeenCodeInfo],
         seen_frame_codes: dict[str, SeenCodeInfo],
         seen_data_names_in_block: dict[str, SeenCodeInfo],
         seen_data_names_in_frame: dict[str, SeenCodeInfo],
+        seen_data_categories_in_block: dict[str, SeenCodeInfo] | None = None,
+        seen_data_categories_in_frame: dict[str, SeenCodeInfo] | None = None,
+        seen_table_categories_in_block: dict[str, SeenCodeInfo] | None = None,
+        seen_table_categories_in_frame: dict[str, SeenCodeInfo] | None = None,
         expected_tokens: list[Token],
     ):
         self.error_type = error_type
@@ -68,12 +77,18 @@ class CIFFileParseError(Exception):
         self.token_value = token_value
         self.block_code = block_code
         self.frame_code = frame_code
+        self.data_category = data_category
+        self.data_keyword = data_keyword
         self.data_name = data_name
         self.data_value = data_value
         self.seen_block_codes = seen_block_codes
         self.seen_frame_codes = seen_frame_codes
         self.seen_data_names_in_block = seen_data_names_in_block
         self.seen_data_names_in_frame = seen_data_names_in_frame
+        self.seen_data_categories_in_block = seen_data_categories_in_block
+        self.seen_data_categories_in_frame = seen_data_categories_in_frame
+        self.seen_table_categories_in_block = seen_table_categories_in_block
+        self.seen_table_categories_in_frame = seen_table_categories_in_frame
 
         self.expected_tokens = expected_tokens or []
         self.seen: SeenCodeInfo | None = None
@@ -165,6 +180,51 @@ class CIFFileParseError(Exception):
             f"The data name '_{self.data_name}' {self.address_path}, {self.address_index} "
             f"is not valid in mmCIF format. "
             f"mmCIF data names must contain exactly one period ('.') character."
+        )
+        return error_msg
+
+    def _msg_table_cat_duplicate(self) -> str:
+        """Generate error message and data for duplicated category in table error."""
+        seen_codes = (
+            self.seen_data_categories_in_frame
+            if self.frame_code is not None
+            else self.seen_data_categories_in_block
+        )
+        seen_info = seen_codes[self.data_category]
+        error_msg = (
+            "Duplicated category in table: "
+            f"The table data category '{self.data_category}' {self.address_path}, {self.address_index} "
+            f"is already declared earlier at token index {seen_info.idx} "
+            f"(character index range {seen_info.start}-{seen_info.end}). "
+            f"Each table's data category must be unique within its data block or save frame."
+        )
+        return error_msg
+
+    def _msg_table_cat_repeated(self) -> str:
+        """Generate error message and data for repeated category in table error."""
+        seen_codes = (
+            self.seen_table_categories_in_frame
+            if self.frame_code is not None
+            else self.seen_table_categories_in_block
+        )
+        seen_info = seen_codes[self.data_category]
+        error_msg = (
+            "Repeated category in table: "
+            f"The data category '{self.data_category}' {self.address_path}, {self.address_index} "
+            f"is already declared in an earlier table with token index {seen_info.idx} "
+            f"(character index range {seen_info.start}-{seen_info.end}). "
+            f"Each table's data category must be unique within its data block or save frame."
+        )
+        return error_msg
+
+    def _msg_table_multicat(self) -> str:
+        """Generate error message and data for multi-category table error."""
+        error_msg = (
+            "Multi-category table: "
+            f"The table {self.address_path}, {self.address_index} "
+            f"contains data items from multiple categories. "
+            f"All data items in a table must belong to the same category, "
+            f"but the current data category '{self.data_category}' is not the same as the earlier one."
         )
         return error_msg
 
