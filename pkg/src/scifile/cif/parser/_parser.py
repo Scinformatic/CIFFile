@@ -110,6 +110,7 @@ class CIFParser:
         *,
         variant: Literal["cif1", "mmcif"] = "mmcif",
         encoding: str = "utf-8",
+        raise_level: Literal[0, 1, 2] = 2,
     ) -> None:
         NOOP = lambda: None
 
@@ -171,6 +172,7 @@ class CIFParser:
 
         self._file: FileLike = file
         self._variant: Literal["cif1", "mmcif"] = variant
+        self._raise_level: Literal[0, 1, 2] = raise_level
         self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(
             filelike_to_str(file, encoding=encoding)
         )
@@ -186,17 +188,23 @@ class CIFParser:
         self._curr_block_code: str | None = None
         self._curr_frame_code: str | None = None
         self._curr_data_name: str | None = None
+        self._curr_data_category: str | None = None
+        self._curr_data_keyword: str | None = None
         self._curr_data_value: str | None = None
 
         self._seen_block_codes_in_file: dict[str, SeenCodeInfo] = {}
         self._seen_frame_codes_in_block: dict[str, SeenCodeInfo] = {}
         self._seen_data_names_in_block: dict[str, SeenCodeInfo] = {}
+        self._seen_data_categories_in_block: dict[str, SeenCodeInfo] = {}
         self._seen_data_names_in_frame: dict[str, SeenCodeInfo] = {}
+        self._seen_data_categories_in_frame: dict[str, SeenCodeInfo] = {}
+        self._seen_table_categories_in_block: dict[str, SeenCodeInfo] = {}
+        self._seen_table_categories_in_frame: dict[str, SeenCodeInfo] = {}
 
         self._output_block_codes: list[str] = []
         self._output_frame_codes: list[str | None] = []
-        self._output_loop_codes: list[int] = []
-        self._output_data_names: list[str] = []
+        self._output_data_categories: list[str | None] = []
+        self._output_data_keywords: list[str] = []
         self._output_data_values: list[list[str]] = []
 
         self._loop_value_lists: itertools.cycle = None
@@ -242,14 +250,13 @@ class CIFParser:
             # End of file reached in an invalid state
             self._register_error(CIFFileParseErrorType.FILE_INCOMPLETE)
 
-        output = CIFFlatDict(
-            block_code=self._output_block_codes,
-            frame_code=self._output_frame_codes,
-            loop_code=self._output_loop_codes,
-            data_name=self._output_data_names,
-            data_values=self._output_data_values,
+        return CIFFlatDict(
+            block=self._output_block_codes,
+            frame=self._output_frame_codes,
+            category=self._output_data_categories,
+            keyword=self._output_data_keywords,
+            values=self._output_data_values,
         )
-        return output
 
     # State Update Actions
     # --------------------
@@ -259,15 +266,8 @@ class CIFParser:
         block_code = self._curr_token_value
 
         # Set current values
+        self._reset_currents("block")
         self._curr_block_code = block_code
-        self._curr_frame_code = None
-        self._curr_data_name = None
-        self._curr_data_value = None
-
-        # Update seen codes trackers
-        self._seen_frame_codes_in_block = {}
-        self._seen_data_names_in_block = {}
-        self._seen_data_names_in_frame = {}
 
         if block_code == "":
             self._register_error(CIFFileParseErrorType.BLOCK_CODE_EMPTY)
@@ -286,12 +286,8 @@ class CIFParser:
         frame_code = self._curr_token_value.removeprefix("_")
 
         # Set current values
+        self._reset_currents("frame")
         self._curr_frame_code = frame_code
-        self._curr_data_name = None
-        self._curr_data_value = None
-
-        # Update seen codes trackers
-        self._seen_data_names_in_frame = {}
 
         if frame_code == "":
             self._register_error(CIFFileParseErrorType.FRAME_CODE_EMPTY)
@@ -307,11 +303,8 @@ class CIFParser:
 
     def _new_loop(self) -> None:
         """Initialize a new loop."""
+        self._reset_currents("loop")
         loop_code = self._curr_token_value
-
-        self._curr_data_name = None
-        self._curr_data_value = None
-
         self._curr_loop_id += 1
         self._curr_loop_columns = []
 
@@ -321,23 +314,37 @@ class CIFParser:
 
     def _new_name_in_data_block(self) -> None:
         """Initialize a new data name in the current data block."""
-        return self._new_name(self._seen_data_names_in_block)
+        return self._new_name(
+            seen_names=self._seen_data_names_in_block,
+            seen_categories=self._seen_data_categories_in_block,
+            seen_tables=self._seen_table_categories_in_block,
+        )
 
     def _new_name_in_save_frame(self) -> None:
         """Initialize a new data name in the current save frame."""
-        return self._new_name(self._seen_data_names_in_frame)
+        return self._new_name(
+            seen_names=self._seen_data_names_in_frame,
+            seen_categories=self._seen_data_categories_in_frame,
+            seen_tables=self._seen_table_categories_in_frame
+        )
 
     def _new_name_in_loop(self) -> None:
         """Initialize a new data name in the current loop."""
-        self._new_name(self._seen_data_names_in_block if self._curr_frame_code is None else self._seen_data_names_in_frame)
+        seen_names, seen_categories, seen_tables = self._get_seen_dicts()
+        self._new_name(
+            seen_names=seen_names,
+            seen_categories=seen_categories,
+            seen_tables=seen_tables,
+            loop_id=self._curr_loop_id
+        )
         new_column = []
         self._curr_loop_columns.append(new_column)
-        self._add_data(data_value=new_column, loop_id=self._curr_loop_id)
+        self._add_data(data_value=new_column)
         return
 
     def _new_value(self) -> None:
         self._curr_data_value = self._curr_token_value
-        self._add_data(data_value=[self._curr_data_value], loop_id=0)
+        self._add_data(data_value=[self._curr_data_value])
         return
 
     def _new_value_in_loop(self) -> None:
@@ -351,20 +358,26 @@ class CIFParser:
         """Finalize loop header processing."""
         self._loop_value_lists = itertools.cycle(self._curr_loop_columns)
         self._loop_value_lists_idx = itertools.cycle(range(len(self._curr_loop_columns)))
+        if self._variant == "mmcif":
+            _, seen_categories, seen_tables = self._get_seen_dicts()
+            cat = self._curr_data_category
+            for seen in (seen_categories, seen_tables):
+                seen[cat] = SeenCodeInfo(
+                    idx=self._curr_token_idx,
+                    start=self._curr_match.start(),
+                    end=self._curr_match.end(),
+                )
         return
 
     def _end_loop(self):
         if next(self._loop_value_lists_idx) != 0:
             self._register_error(CIFFileParseErrorType.TABLE_INCOMPLETE)
+        self._reset_currents("loop")
         return
 
     def _end_save_frame(self) -> None:
         """Process frame end token."""
-        self._curr_frame_code = None
-        self._curr_data_name = None
-        self._curr_data_value = None
-
-        self._seen_data_names_in_frame = {}
+        self._reset_currents("frame")
         return
 
     def _wrong_token(self) -> None:
@@ -409,7 +422,31 @@ class CIFParser:
     # State Error Handler
     # -------------------
 
-    def _register_error(self, error_type: CIFFileParseErrorType) -> None:
+    def _register_error(
+        self,
+        error_type: CIFFileParseErrorType,
+        *,
+        state: State | None = None,
+        token_idx: int | None = None,
+        match: re.Match | None = None,
+        token_type: Token | None = None,
+        token_value: str | None = None,
+        block_code: str | None = None,
+        frame_code: str | None = None,
+        data_category: str | None = None,
+        data_keyword: str | None = None,
+        data_name: str | None = None,
+        data_value: str | None = None,
+        seen_block_codes: dict[str, SeenCodeInfo] | None = None,
+        seen_frame_codes: dict[str, SeenCodeInfo] | None = None,
+        seen_data_names_in_block: dict[str, SeenCodeInfo] | None = None,
+        seen_data_names_in_frame: dict[str, SeenCodeInfo] | None = None,
+        seen_data_categories_in_block: dict[str, SeenCodeInfo] | None = None,
+        seen_data_categories_in_frame: dict[str, SeenCodeInfo] | None = None,
+        seen_table_categories_in_block: dict[str, SeenCodeInfo] | None = None,
+        seen_table_categories_in_frame: dict[str, SeenCodeInfo] | None = None,
+        expected_tokens: list[Token] | None = None,
+    ) -> None:
         """
         Given an error type, raise it as a `CIFParsingError` or post a warning message,
         depending on the level of `strictness` and the error level.
@@ -425,33 +462,48 @@ class CIFParser:
         ------
         CIFParsingError
         """
-        error = CIFFileParseError(
-            error_type=error_type,
-            state=self._curr_state,
-            token_idx=self._curr_token_idx,
-            match=self._curr_match,
-            token_type=self._curr_token_type,
-            token_value=self._curr_token_value,
-            block_code=self._curr_block_code,
-            frame_code=self._curr_frame_code,
-            data_name=self._curr_data_name,
-            data_value=self._curr_data_value,
-            seen_block_codes=self._seen_block_codes_in_file.copy(),
-            seen_frame_codes=self._seen_frame_codes_in_block.copy(),
-            seen_data_names_in_block=self._seen_data_names_in_block.copy(),
-            seen_data_names_in_frame=self._seen_data_names_in_frame.copy(),
-            expected_tokens=[
+        error_kwargs = {
+            "state": self._curr_state,
+            "token_idx": self._curr_token_idx,
+            "match": self._curr_match,
+            "token_type": self._curr_token_type,
+            "token_value": self._curr_token_value,
+            "block_code": self._curr_block_code,
+            "frame_code": self._curr_frame_code,
+            "data_category": self._curr_data_category,
+            "data_keyword": self._curr_data_keyword,
+            "data_name": self._curr_data_name,
+            "data_value": self._curr_data_value,
+            "seen_block_codes": self._seen_block_codes_in_file.copy(),
+            "seen_frame_codes": self._seen_frame_codes_in_block.copy(),
+            "seen_data_names_in_block": self._seen_data_names_in_block.copy(),
+            "seen_data_names_in_frame": self._seen_data_names_in_frame.copy(),
+            "seen_data_categories_in_block": self._seen_data_categories_in_block.copy(),
+            "seen_data_categories_in_frame": self._seen_data_categories_in_frame.copy(),
+            "seen_table_categories_in_block": self._seen_table_categories_in_block.copy(),
+            "seen_table_categories_in_frame": self._seen_table_categories_in_frame.copy(),
+            "expected_tokens": [
                 token for state, token in self._state_mapper.keys()
                 if state == self._curr_state
-            ]
-        )
+            ],
+        } | {
+            k: v for k, v in locals().items()
+            if v is not None and k != "self"
+        }
+        error = CIFFileParseError(**error_kwargs)
         self.errors.append(error)
         return
 
     # Private Helper Methods
     # ======================
 
-    def _new_name(self, seen_names: dict[str, SeenCodeInfo]) -> None:
+    def _new_name(
+        self,
+        seen_names: dict[str, SeenCodeInfo],
+        seen_categories: dict[str, SeenCodeInfo],
+        seen_tables: dict[str, SeenCodeInfo],
+        loop_id: int | None = None,
+    ) -> None:
         """Initialize a new data name."""
         data_name = self._curr_token_value
 
@@ -459,13 +511,39 @@ class CIFParser:
         self._curr_data_name = data_name
         self._curr_data_value = None
 
-        if data_name == "":
-            self._register_error(CIFFileParseErrorType.DATA_NAME_EMPTY)
-        if self._variant == "mmcif":
-            period_count = data_name.count(".")
+        if self._variant == "cif1":
+            self._curr_data_category = str(loop_id) if loop_id is not None else None
+            self._curr_data_keyword = data_name
+        elif self._variant == "mmcif":
+            last_data_category = self._curr_data_category
+            parts = data_name.split(".")
+            period_count = len(parts) - 1
+            if period_count == 0:
+                self._curr_data_category = None
+                self._curr_data_keyword = data_name
+            else:
+                self._curr_data_category = parts[0]
+                self._curr_data_keyword = ".".join(parts[1:])
+
             if period_count != 1:
                 self._register_error(CIFFileParseErrorType.DATA_NAME_NOT_MMCIF)
+            if self._curr_data_category in seen_tables:
+                self._register_error(CIFFileParseErrorType.TABLE_CAT_REPEATED)
 
+            if loop_id is None:
+                seen_categories[self._curr_data_category] = SeenCodeInfo(
+                    idx=self._curr_token_idx,
+                    start=self._curr_match.start(),
+                    end=self._curr_match.end(),
+                )
+            else:
+                if self._curr_data_category in seen_categories:
+                    self._register_error(CIFFileParseErrorType.TABLE_CAT_DUPLICATE)
+                if last_data_category is not None and self._curr_data_category != last_data_category:
+                    self._register_error(CIFFileParseErrorType.TABLE_MULTICAT)
+
+        if data_name == "":
+            self._register_error(CIFFileParseErrorType.DATA_NAME_EMPTY)
         if data_name in seen_names:
             self._register_error(CIFFileParseErrorType.DATA_NAME_DUPLICATE)
         seen_names[data_name] = SeenCodeInfo(
@@ -475,10 +553,61 @@ class CIFParser:
         )
         return
 
-    def _add_data(self, data_value: str | list, loop_id: int):
+    def _add_data(self, data_value: str | list):
         self._output_block_codes.append(self._curr_block_code)
         self._output_frame_codes.append(self._curr_frame_code)
-        self._output_loop_codes.append(loop_id)
-        self._output_data_names.append(self._curr_data_name)
+        self._output_data_categories.append(self._curr_data_category)
+        self._output_data_keywords.append(self._curr_data_keyword)
         self._output_data_values.append(data_value)
         return
+
+    def _reset_currents(self, level: Literal["block", "frame", "loop"]) -> None:
+        """Reset parser state to a given level.
+
+        Parameters
+        ----------
+        level
+            Level to reset to; one of:
+            - "block": Reset to new data block level.
+            - "frame": Reset to new save frame level.
+            - "loop": Reset to new loop level.
+        """
+        l = {"block": 0, "frame": 1, "loop": 2}[level]
+        self._curr_data_name = None
+        self._curr_data_category = None
+        self._curr_data_keyword = None
+        self._curr_data_value = None
+        if l < 2:
+            self._curr_frame_code = None
+            self._seen_table_categories_in_frame = {}
+            self._seen_data_names_in_frame = {}
+            self._seen_data_categories_in_frame = {}
+        if l < 1:
+            self._curr_block_code = None
+            self._seen_frame_codes_in_block = {}
+            self._seen_table_categories_in_block = {}
+            self._seen_data_names_in_block = {}
+            self._seen_data_categories_in_block = {}
+        return
+
+    def _get_seen_dicts(self) -> tuple[dict[str, SeenCodeInfo], dict[str, SeenCodeInfo], dict[str, SeenCodeInfo]]:
+        """Get the appropriate seen code dictionaries based on the current context.
+
+        Returns
+        -------
+        seen_data_names
+            Seen data names dictionary.
+        seen_data_categories
+            Seen data categories dictionary.
+        seen_table_categories
+            Seen table categories dictionary.
+        """
+        return (
+            self._seen_data_names_in_block,
+            self._seen_data_categories_in_block,
+            self._seen_table_categories_in_block,
+        ) if self._curr_frame_code is None else (
+            self._seen_data_names_in_frame,
+            self._seen_data_categories_in_frame,
+            self._seen_table_categories_in_frame,
+        )
