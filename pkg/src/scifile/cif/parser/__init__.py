@@ -19,7 +19,8 @@ def parse(
     file: FileLike,
     *,
     variant: Literal["cif1", "mmcif"] = "mmcif",
-    encoding: str = "utf-8"
+    encoding: str = "utf-8",
+    raise_level: Literal[0, 1, 2] = 2,
 ) -> tuple[CIFFlatDict, list[CIFFileParseError]]:
     """Parse a CIF file into a flat dictionary representation.
 
@@ -40,5 +41,5 @@ def parse(
         A tuple containing the parsed CIF file as a flat dictionary
         and a list of parsing errors encountered during parsing.
     """
-    parser = CIFParser(file, variant=variant, encoding=encoding)
+    parser = CIFParser(file, variant=variant, encoding=encoding, raise_level=raise_level)
     return parser.output, parser.errors
