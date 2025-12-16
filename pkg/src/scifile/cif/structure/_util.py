@@ -136,7 +136,7 @@ def extract_categories(
 
     # Partition by category
     tables: dict[str, pl.DataFrame] = {}
-    for cat_value, subdf in df.partition_by(col_name_cat, as_dict=True).items():
+    for cat_value, subdf in df.partition_by(col_name_cat, include_key=False, as_dict=True).items():
         # Polars uses the partition key as the dict key; for single key it’s usually a scalar,
         # but can be a tuple depending on version/inputs.
         category_name = str(cat_value[0] if isinstance(cat_value, tuple) else cat_value)
@@ -161,7 +161,6 @@ def extract_categories(
         # and within each keep-group, all `values` lists have the same length.
         tables[category_name] = (
             subdf
-            .drop(col_name_cat)
             .with_columns(idx_data=pl.int_ranges(0, pl.col(col_name_values).list.len()))
             .explode([col_name_values, "idx_data"])
             .pivot(
@@ -178,15 +177,15 @@ def extract_files(
     df: pl.DataFrame,
     files: set[Literal["data", "dict", "dict_cat", "dict_key"]] | None = None,
     *,
-    col_name_frame: str | None = "frame_code",
+    col_name_frame: str,
 ) -> dict[str, pl.DataFrame]:
-    """data/dictionary parts of the CIF file.
+    """Extract data/dictionary parts of the CIF file.
 
     Parameters
     ----------
     df
         CIF DataFrame to extract from.
-    *file
+    files
         Parts to extract; from:
         - "data": Data file,
             i.e., data items that are directly under a data block
@@ -201,30 +200,37 @@ def extract_files(
             (period in the frame code).
 
         If none provided, all parts found in the CIF file are extracted.
+    col_name_frame
+        Name of the column containing save frame codes.
 
     Returns
     -------
     extracted_df
         The extracted DataFrame part.
     """
-    frame_cat = pl.col("frame_code_category")
-    frame_key = pl.col("frame_code_keyword")
-    condition = frame_cat.is_null() if part == "data" else frame_cat.is_not_null()
+    frame_code = pl.col(col_name_frame)
 
-    if part == "data":
-        final_columns = pl.exclude(["frame_code_category", "frame_code_keyword"])
-    elif part == "def":
-        final_columns = pl.all()
-    elif part == "def_cat":
-        condition &= frame_key.is_null()
-        final_columns = pl.exclude(["frame_code_keyword"])
-    elif part == "def_key":
-        condition &= frame_key.is_not_null()
-        final_columns = pl.all()
-    else:
-        raise ValueError(f"Invalid part: {part}")
+    is_data = frame_code.is_null()
+    is_dict = ~is_data
+    code_has_period = frame_code.str.contains(r"\.")
 
-    return df.filter(condition).select(final_columns)
+    out = {}
+    for part in files or ["data", "dict", "dict_cat", "dict_key"]:
+        if part == "data":
+            condition = is_data
+            final_columns = pl.exclude([col_name_frame])
+        else:
+            final_columns = pl.all()
+            if part == "dict":
+                condition = is_dict
+            elif part == "dict_cat":
+                condition = is_dict & ~code_has_period
+            elif part == "dict_key":
+                condition = is_dict & code_has_period
+            else:
+                raise ValueError(f"Invalid part: {part}")
+        out[part] = df.filter(condition).select(final_columns)
+    return out
 
 
 def validate_content_df(
