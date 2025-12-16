@@ -67,7 +67,8 @@ import re
 from collections.abc import Iterator
 from typing import NamedTuple, Literal
 
-from ciffile._util import filelike_to_str
+from fileex.file import content as filelike_to_str
+
 from ciffile.typing import FileLike
 from ._exception import CIFFileParseError, CIFFileParseErrorType
 from ._output import CIFFlatDict
@@ -174,7 +175,7 @@ class CIFParser:
         self._variant: Literal["cif1", "mmcif"] = variant
         self._raise_level: Literal[0, 1, 2] = raise_level
         self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(
-            filelike_to_str(file, encoding=encoding)
+            filelike_to_str(file, output="str", encoding=encoding)
         )
 
         # Parser state variables
