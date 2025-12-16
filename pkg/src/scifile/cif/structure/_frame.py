@@ -1,15 +1,16 @@
 """CIF save frame data structure."""
 
-from typing import Literal, Iterator, Callable, Sequence
+from typing import Literal, Callable, Sequence
 
 import polars as pl
 
 from ._base import CIFBlockSkeleton
 from ._category import CIFDataCategory
 from ._util import extract_categories
+from ._block_like import CIFBlockLike
 
 
-class CIFFrame(CIFBlockSkeleton):
+class CIFFrame(CIFBlockSkeleton, CIFBlockLike):
     """CIF file save frame."""
 
     def __init__(
@@ -24,6 +25,7 @@ class CIFFrame(CIFBlockSkeleton):
         col_name_values: str,
     ):
         super().__init__(
+            code=code,
             content=content,
             variant=variant,
             validate=validate,
@@ -35,29 +37,7 @@ class CIFFrame(CIFBlockSkeleton):
             col_name_key=col_name_key,
             col_name_values=col_name_values,
         )
-
-        self._code = code
-
-        self._category_codes: pl.Series | None = None
-        self._categories: dict[str, CIFDataCategory] = {}
         return
-
-    @property
-    def code(self) -> str:
-        """Save frame code."""
-        return self._code
-
-    @property
-    def category_codes(self) -> pl.Series:
-        """Unique data category names in the save frame."""
-        if self._category_codes is None:
-            self._category_codes = self._df[self._col_cat].unique()
-        return self._category_codes
-
-    def categories(self) -> Iterator[CIFDataCategory]:
-        """Iterate over data categories in the save frame."""
-        for category in self._get_categories().values():
-            yield category
 
     def write(
         self,
@@ -114,45 +94,6 @@ class CIFFrame(CIFBlockSkeleton):
         writer(f"{space}save_\n")
         return
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over data category codes in the save frame."""
-        for cat_code in self.category_codes:
-            yield cat_code
-
-    def __getitem__(
-        self,
-        category_id: str | int | tuple[str | int, ...] | slice[int]
-    ) -> CIFDataCategory | list[CIFDataCategory]:
-        """Get a data category by its code or index."""
-        if isinstance(category_id, str | int):
-            category_id = (category_id,)
-            single = True
-        else:
-            single = False
-
-        if isinstance(category_id, tuple):
-            codes = [
-                self.category_codes[cat_id]
-                if isinstance(cat_id, int)
-                else cat_id
-                for cat_id in category_id
-            ]
-        elif isinstance(category_id, slice):
-            codes = self.category_codes[category_id].to_list()
-        else:
-            raise TypeError("category_id must be str, int, tuple, or slice")
-
-        categories = self._get_categories()
-        out = [categories[k] for k in codes]
-
-        if single:
-            return out[0]
-        return out
-
-    def __len__(self) -> int:
-        """Number of data categories in the save frame."""
-        return len(self.category_codes)
-
     def __repr__(self) -> str:
         """Representation of the save frame."""
         return f"CIFFrame(code={self._code!r}, variant={self._variant!r}, categories={len(self)!r})"
@@ -172,8 +113,8 @@ class CIFFrame(CIFBlockSkeleton):
         )
         for cat_name, table in category_dfs.items():
             category = CIFDataCategory(
-                name=cat_name,
-                table=table,
+                code=cat_name,
+                content=table,
                 variant=self._variant,
                 col_name_block=None,
                 col_name_frame=None,
