@@ -275,6 +275,6 @@ class CIFFile(CIFFileSkeleton):
                 self._col_block,
                 include_key=False,
                 as_dict=True,
-            )
+            ).items()
         }
         return self._block_dfs
