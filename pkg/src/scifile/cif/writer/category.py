@@ -181,6 +181,14 @@ def write(
     -------
     None
         Uses the provided `writer` callable to output the CIF data category.
+
+    Raises
+    ------
+    TypeError
+        If the input DataFrame contains unsupported dtypes.
+    ValueError
+        If any multiline string contains a line beginning with ';',
+        which cannot be represented exactly as a CIF 1.1 text field.
     """
     if indent < 0 or indent_inner < 0:
         raise ValueError("indent and indent_inner must be >= 0")
@@ -676,4 +684,3 @@ def _to_text_field(s: pl.Expr) -> pl.Expr:
     """
     delim = pl.lit("\n;")
     return pl.concat_str([delim, s, delim])
-
