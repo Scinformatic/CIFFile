@@ -4,7 +4,7 @@ from typing import Literal, Callable, Sequence
 
 import polars as pl
 
-from ._base import CIFBlockSkeleton
+from ._skel import CIFBlockSkeleton
 from ._category import CIFDataCategory
 from ._util import extract_categories
 from ._block_like import CIFBlockLike
