@@ -1,6 +1,6 @@
 """CIF block data structure base class."""
 
-from scifile.typing import DataFrameLike
+from ciffile.typing import DataFrameLike
 
 from .._util import validate_content_df
 from ._base import CIFSkeleton

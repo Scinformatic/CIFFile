@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from scifile.typing import FileLike
+from ciffile.typing import FileLike
 
 from ._parser import CIFParser
 from ._output import CIFFlatDict

@@ -2,7 +2,7 @@ from typing import Literal, Sequence
 
 import polars as pl
 
-from scifile.typing import DataFrameLike
+from ciffile.typing import DataFrameLike
 
 
 def extract_categories(

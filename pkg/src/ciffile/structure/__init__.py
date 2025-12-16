@@ -6,7 +6,7 @@ from ._file import CIFFile
 from ._frame import CIFFrame
 
 
-from scifile.typing import DataFrameLike
+from ciffile.typing import DataFrameLike
 
 
 __all__ = [

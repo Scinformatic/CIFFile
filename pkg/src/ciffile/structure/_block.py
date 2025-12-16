@@ -4,7 +4,7 @@ from typing import Literal, Iterator, Callable, Sequence, Self
 
 import polars as pl
 
-from scifile.typing import DataFrameLike
+from ciffile.typing import DataFrameLike
 from ._skel import CIFFileSkeleton
 from ._block_like import CIFBlockLike
 from ._util import extract_categories

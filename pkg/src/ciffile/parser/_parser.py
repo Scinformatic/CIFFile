@@ -67,8 +67,8 @@ import re
 from collections.abc import Iterator
 from typing import NamedTuple, Literal
 
-from scifile._util import filelike_to_str
-from scifile.typing import FileLike
+from ciffile._util import filelike_to_str
+from ciffile.typing import FileLike
 from ._exception import CIFFileParseError, CIFFileParseErrorType
 from ._output import CIFFlatDict
 from ._token import Token, TOKENIZER

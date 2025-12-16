@@ -18,5 +18,8 @@ namespaces = true
 #
 [project]
 version = "0.0.0"
-name = "SciFile"
+name = "CIFFile"
 requires-python = ">=3.10"
+dependencies = [
+    "polars >=1",
+]

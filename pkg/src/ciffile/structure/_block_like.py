@@ -13,7 +13,7 @@ from ._category import CIFDataCategory
 
 if TYPE_CHECKING:
     from typing import Literal
-    from scifile.typing import DataFrameLike
+    from ciffile.typing import DataFrameLike
 
 
 class CIFBlockLike:

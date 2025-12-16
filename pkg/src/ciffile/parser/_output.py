@@ -2,7 +2,7 @@
 
 
 from typing import TypedDict
-from scifile.cif.typing import BlockCode, FrameCode, DataCategory, DataKeyword, DataValues
+from ciffile.typing import BlockCode, FrameCode, DataCategory, DataKeyword, DataValues
 
 
 class CIFFlatDict(TypedDict):

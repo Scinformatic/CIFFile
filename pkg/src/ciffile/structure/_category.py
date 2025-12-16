@@ -2,7 +2,7 @@ from typing import Literal, Callable, Sequence
 
 import polars as pl
 
-from scifile.cif.writer.category import write
+from ciffile.writer import category as write_category
 
 from ._skel import CIFSkeleton
 
@@ -198,7 +198,7 @@ class CIFDataCategory(CIFSkeleton):
         if self._variant == "mmcif":
             # Set column names to full data names
             df = df.select(pl.all().name.prefix(f"_{self._code}."))
-        write(
+        write_category(
             df,
             writer,
             bool_true=bool_true,

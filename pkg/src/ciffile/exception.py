@@ -3,17 +3,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from enum import Enum, auto
 
-from scifile.exception import SciFileError
 
 if TYPE_CHECKING:
     from typing import Literal
-    from scifile.typing import FileLike
+    from ciffile.typing import FileLike
     from .structure import CIFFile
     from .parser import CIFFileParseError
 
 
-class CIFFileError(SciFileError):
-    """Base exception for CIF file errors."""
+class CIFFileError:
+    """Base exception for CIFFile errors."""
     def __init__(
         self,
         message: str,

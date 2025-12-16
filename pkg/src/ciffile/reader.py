@@ -9,7 +9,7 @@ from .structure import CIFFile, file as _create_cif_file
 from .exception import CIFFileReadError, CIFFileReadErrorType
 
 if TYPE_CHECKING:
-    from scifile.typing import FileLike
+    from ciffile.typing import FileLike
     from typing import Literal
 
 

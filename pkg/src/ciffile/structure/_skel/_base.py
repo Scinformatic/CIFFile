@@ -5,7 +5,7 @@ from typing import Callable, Literal
 
 import polars as pl
 
-from scifile.typing import DataFrameLike
+from ciffile.typing import DataFrameLike
 
 
 class CIFSkeleton(metaclass=ABCMeta):
