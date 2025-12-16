@@ -1,11 +1,11 @@
-from typing import Literal, Any
+from typing import Literal, Any, Self
 
 import polars as pl
 
 from scifile.typing import DataFrameLike
 from scifile.cif.typing import BlockCode, FrameCode, DataCategory, DataKeyword, DataValues
 from ._category import CIFDataCategory
-from ._util import extract, extract_tables, validate_content_df
+from ._util import extract_files, extract_categories, validate_content_df
 
 
 class CIFFile:
@@ -47,7 +47,7 @@ class CIFFile:
             filetype = "data"
 
         self._df = df
-        self._variant = variant
+        self._variant: Literal["cif1", "mmcif"] = variant
         self._col_block = col_name_block
         self._col_frame = col_name_frame
         self._col_cat = col_name_cat
@@ -60,12 +60,12 @@ class CIFFile:
         return
 
     @property
-    def filetype(self) -> Literal["data", "dict"]:
+    def type(self) -> Literal["data", "dict"]:
         """Type of CIF file
 
         Either:
-        - "data": The file contains no save frames; all data items are directly under data blocks.
-        - "dict": The file contains save frames; some data items are under save frames.
+        - "data": File contains no save frames; all data items are directly under data blocks.
+        - "dict": File contains save frames; some data items are under save frames.
         """
         return self._filetype
 
@@ -85,6 +85,74 @@ class CIFFile:
     def block_count(self) -> int:
         """Number of data blocks in the CIF file."""
         return self.block_codes.shape[0]
+
+    def file(
+        self,
+        *file: Literal["data", "dict", "dict_cat", "dict_key"],
+    ) -> Self | None | dict[str, Self | None]:
+        """Isolate data/dictionary parts of the CIF file.
+
+        Parameters
+        ----------
+        *file
+            Parts to extract; from:
+            - "data": Data file,
+              i.e., data items that are directly under a data block
+              (and not in any save frames).
+            - "dict": Dictionary file,
+              i.e., data items that are in save frames.
+            - "dict_cat": Category dictionary file,
+              i.e., data items that are in save frames without a frame code keyword
+              (no period in the frame code).
+            - "dict_key": Key dictionary file,
+              i.e., data items that are in save frames with a frame code keyword
+              (period in the frame code).
+
+            If none provided, all parts found in the CIF file are extracted.
+
+        Returns
+        -------
+        isolated_files
+            A single `CIFFile` if only one part is requested,
+            or a dictionary of `CIFFile` objects
+            keyed by part name otherwise.
+        """
+        filetypes = set(file) if file else {"data", "dict", "dict_cat", "dict_key"}
+        if self.type == "data":
+            # Only data part exists
+            out = {
+                "data": self,
+                "dict": None,
+                "dict_cat": None,
+                "dict_key": None,
+            }
+            if len(filetypes) == 1:
+                return out[next(iter(filetypes))]
+            return {part: out[part] for part in filetypes}
+
+        dfs = extract_files(
+            df=self._df,
+            files=filetypes,
+            col_name_frame=self._col_frame,
+        )
+
+        files = {
+            part: (CIFFile(
+                content=sub_df,
+                variant=self._variant,
+                validate=False,
+                col_name_block=self._col_block,
+                col_name_frame=self._col_frame,
+                col_name_cat=self._col_cat,
+                col_name_key=self._col_key,
+                col_name_values=self._col_values,
+            ) if not sub_df.is_empty() else None)
+            for part, sub_df in dfs.items()
+        }
+
+        if len(filetypes) == 1:
+            return files[next(iter(filetypes))]
+        return files
 
     def block(self, block: str | int = 0):
         """Extract a data block by its block code or index.
@@ -109,71 +177,36 @@ class CIFFile:
             df=self.df.filter(pl.col("block_code") == block_code).select(pl.exclude("block_code")),
         )
 
-    def extract(
-        self,
-        part: Literal["data", "def", "def_cat", "def_key", "all"] = "data",
-        reduce: bool = True,
-    ) -> CIFDataFile | CIFDictFile | DDL2CIFCatDefFile | dict[
-        str, CIFDataFile | CIFDictFile | DDL2CIFCatDefFile
-    ]:
-        """Extract part of the CIF file.
-
-        Parameters
-        ----------
-        part
-            Part to extract; one of:
-            - "data": Data,
-              i.e., data items that are directly under a data block
-              (and not in any save frames).
-            - "def": Definitions,
-              i.e., data items that are in save frames.
-            - "def_cat": Category definitions,
-              i.e., data items that are in save frames without a frame code keyword
-              (no period in the frame code).
-            - "def_key": Key definitions,
-              i.e., data items that are in save frames with a frame code keyword
-              (period in the frame code).
-            - "all": All parts; returns a dictionary with keys "data", "def_cat", and "def_key".
-        reduce
-            Whether to reduce the result to a single data block if there is only one.
-
-        Returns
-        -------
-        extracted_part
-            The extracted part(s) of the CIF file.
-        """
-        if reduce and self.block_count == 1:
-            return self.block().extract(part=part)
-
-        if part == "all":
-            parts = ("data", "def_cat", "def_key")
-            sub_dfs = [extract(df=self._df, part=part) for part in parts]
-            return {
-                part: datastruct(df=sub_df)
-                for part, datastruct, sub_df in zip(
-                    parts,
-                    (CIFDataFile, DDL2CIFCatDefFile, CIFDictFile),
-                    sub_dfs,
-                    strict=True,
-                )
-            }
-
-        sub_df = extract(df=self._df, part=part)
-        if part == "data":
-            return CIFDataFile(df=sub_df)
-        if part in ("def", "def_key"):
-            return CIFDictFile(df=sub_df)
-        if part == "def_cat":
-            return DDL2CIFCatDefFile(df=sub_df)
-        raise ValueError(f"Invalid part: {part}")
-
-    def table(
+    def category(
         self,
         *category: str,
         col_name_block: str | None = "_block",
         col_name_frame: str | None = "_frame",
-    ):
-        return extract_tables(
+        drop_redundant: bool = True,
+    ) -> CIFDataCategory | dict[str, CIFDataCategory]:
+        """Extract data category tables from all data blocks/save frames.
+
+        Parameters
+        ----------
+        *category
+            Names of data categories to extract.
+            If none provided, all categories found in the CIF file are extracted.
+        col_name_block
+            Name of the column to use for block codes in the output tables.
+        col_name_frame
+            Name of the column to use for frame codes in the output tables.
+        drop_redundant
+            Whether to drop block/frame code columns
+            if they have the same value for all rows.
+
+        Returns
+        -------
+        data_category_tables
+            A single `CIFDataCategory` if only one category is requested,
+            or a dictionary of `CIFDataCategory` objects
+            keyed by category name otherwise.
+        """
+        dfs, out_col_block, out_col_frame = extract_categories(
             self._df,
             categories=set(category),
             col_name_block=self._col_block,
@@ -183,6 +216,18 @@ class CIFFile:
             col_name_values=self._col_values,
             new_col_name_block=col_name_block,
             new_col_name_frame=col_name_frame,
-            drop_redundant=False,
+            drop_redundant=drop_redundant,
         )
-
+        cats = {
+            cat_name: CIFDataCategory(
+                name=cat_name,
+                table=table,
+                variant=self._variant,
+                col_name_block=out_col_block,
+                col_name_frame=out_col_frame,
+            )
+            for cat_name, table in dfs.items()
+        }
+        if len(cats) == 1:
+            return next(iter(cats.values()))
+        return cats
