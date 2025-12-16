@@ -5,7 +5,7 @@ import polars as pl
 from scifile.typing import DataFrameLike
 
 
-def extract_tables(
+def extract_categories(
     df: pl.DataFrame,
     categories: set[str] | None = None,
     *,
@@ -17,7 +17,7 @@ def extract_tables(
     new_col_name_block: str | None = None,
     new_col_name_frame: str | None = None,
     drop_redundant: bool = False,
-) -> dict[str, pl.DataFrame]:
+) -> tuple[dict[str, pl.DataFrame], str | None, str | None]:
     """Extract tables from CIF DataFrame.
 
     Parameters
@@ -58,6 +58,9 @@ def extract_tables(
         - and `drop_redundant` is `False` (or not all rows have the same value for that column),
         then those columns are included in the output tables as well,
         with names given by `new_col_name_block` and `new_col_name_frame`.
+    out_col_name_{block,frame}
+        The output column names for block and frame code columns in the tables.
+        If the column was not included in the output tables, returns `None` for that column.
 
     Raises
     ------
@@ -136,8 +139,7 @@ def extract_tables(
     for cat_value, subdf in df.partition_by(col_name_cat, as_dict=True).items():
         # Polars uses the partition key as the dict key; for single key it’s usually a scalar,
         # but can be a tuple depending on version/inputs.
-        category_name = cat_value[0] if isinstance(cat_value, tuple) else cat_value
-        category_name = str(category_name)
+        category_name = str(cat_value[0] if isinstance(cat_value, tuple) else cat_value)
 
         # Name conflict check: kept block/frame output names must not collide with keyword columns
         if out_block_name is not None or out_frame_name is not None:
@@ -169,32 +171,36 @@ def extract_tables(
             .drop("idx_data")
         )
 
-    return tables
+    return tables, out_block_name, out_frame_name
 
 
-def extract(
+def extract_files(
     df: pl.DataFrame,
-    part: Literal["data", "def", "def_cat", "def_key"] = "data"
-) -> pl.DataFrame:
-    """Extract part of the CIF DataFrame.
+    files: set[Literal["data", "dict", "dict_cat", "dict_key"]] | None = None,
+    *,
+    col_name_frame: str | None = "frame_code",
+) -> dict[str, pl.DataFrame]:
+    """data/dictionary parts of the CIF file.
 
     Parameters
     ----------
     df
         CIF DataFrame to extract from.
-    part
-        Part to extract; one of:
-        - "data": Data,
-          i.e., data items that are directly under a data block
-          (and not in any save frames).
-        - "def": Definitions,
-          i.e., data items that are in save frames.
-        - "def_cat": Category definitions,
-          i.e., data items that are in save frames without a frame code keyword
-          (no period in the frame code).
-        - "def_key": Key definitions,
-          i.e., data items that are in save frames with a frame code keyword
-          (period in the frame code).
+    *file
+        Parts to extract; from:
+        - "data": Data file,
+            i.e., data items that are directly under a data block
+            (and not in any save frames).
+        - "dict": Dictionary file,
+            i.e., data items that are in save frames.
+        - "dict_cat": Category dictionary file,
+            i.e., data items that are in save frames without a frame code keyword
+            (no period in the frame code).
+        - "dict_key": Key dictionary file,
+            i.e., data items that are in save frames with a frame code keyword
+            (period in the frame code).
+
+        If none provided, all parts found in the CIF file are extracted.
 
     Returns
     -------
