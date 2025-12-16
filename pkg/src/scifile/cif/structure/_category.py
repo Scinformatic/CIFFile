@@ -221,10 +221,5 @@ class CIFDataCategory:
         )
         return
 
-    def __str__(self) -> str:
-        chunks = []
-        self.write(chunks.append)
-        return "".join(chunks)
-
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._name!r}, shape={self._table.shape})"
