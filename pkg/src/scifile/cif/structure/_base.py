@@ -18,8 +18,9 @@ class CIFSkeleton(metaclass=ABCMeta):
         *,
         content: DataFrameLike,
         variant: Literal["cif1", "mmcif"],
-        **_: object,
+        **kwargs: object,
     ) -> None:
+        super().__init__(**kwargs)
         self._df = content if isinstance(content, pl.DataFrame) else pl.DataFrame(content)
         self._variant: Literal["cif1", "mmcif"] = variant
         return
@@ -28,7 +29,6 @@ class CIFSkeleton(metaclass=ABCMeta):
     def write(
         self,
         writer: Callable[[str], None],
-        *,
         **kwargs,
     ) -> None:
         """Write the CIF data structure to the writer."""
@@ -94,7 +94,7 @@ class CIFFileSkeleton(CIFBlockSkeleton):
         col_name_frame: str | None,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(col_name_frame=col_name_frame, **kwargs)
         if col_name_frame in self.df.columns:
             if self.df.select(pl.col(col_name_frame).is_null().all()).item():
                 self._df = self.df.drop(col_name_frame)
