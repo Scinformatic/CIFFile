@@ -39,6 +39,7 @@ class CIFFile(CIFFileSkeleton):
         )
 
         self._block_codes: pl.Series = None
+        self._block_dfs: dict[str, pl.DataFrame] = {}
         self._blocks: dict[str, CIFBlock] = {}
         return
 
@@ -160,8 +161,8 @@ class CIFFile(CIFFileSkeleton):
         )
         cats = {
             cat_name: CIFDataCategory(
-                name=cat_name,
-                table=table,
+                code=cat_name,
+                content=table,
                 variant=self._variant,
                 col_name_block=out_col_block,
                 col_name_frame=out_col_frame,
@@ -245,9 +246,7 @@ class CIFFile(CIFFileSkeleton):
             return self._blocks[block_code]
         block = CIFBlock(
             code=block_code,
-            content=self.df.filter(
-                pl.col(self._col_block) == block_code
-            ).select(pl.exclude(self._col_block)),
+            content=self._get_block_dfs()[block_code],
             variant=self._variant,
             validate=False,
             col_name_frame=self._col_frame,
@@ -265,3 +264,17 @@ class CIFFile(CIFFileSkeleton):
     def __repr__(self) -> str:
         """Representation of the CIF file."""
         return f"CIFFile(type={self.type!r}, variant={self._variant!r}, blocks={len(self)!r})"
+
+    def _get_block_dfs(self) -> dict[str, pl.DataFrame]:
+        """Get DataFrames per data block in the CIF file."""
+        if self._block_dfs:
+            return self._block_dfs
+        self._block_dfs = {
+            key[0]: df
+            for key, df in self.df.partition_by(
+                self._col_block,
+                include_key=False,
+                as_dict=True,
+            )
+        }
+        return self._block_dfs
