@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .parser import CIFFileParseError
 
 
-class CIFFileError:
+class CIFFileError(Exception):
     """Base exception for CIFFile errors."""
     def __init__(
         self,
