@@ -1,12 +1,13 @@
 """CIF block data structure."""
 
-from typing import Literal, Iterator, Callable, Sequence
+from typing import Literal, Iterator, Callable, Sequence, Self
 
 import polars as pl
 
-from ._base import CIFFileSkeleton
+from scifile.typing import DataFrameLike
+from ._skel import CIFFileSkeleton
 from ._block_like import CIFBlockLike
-from ._util import extract_categories, extract_files
+from ._util import extract_categories
 from ._category import CIFDataCategory
 from ._frame import CIFFrame
 
@@ -164,7 +165,7 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
     def __init__(
         self,
         code: str,
-        content: pl.DataFrame,
+        content: DataFrameLike,
         *,
         variant: Literal["cif1", "mmcif"],
         validate: bool,
@@ -186,7 +187,6 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
             col_name_key=col_name_key,
             col_name_values=col_name_values,
         )
-        self._parts: dict[Literal["data", "dict"], pl.DataFrame] = {}
         self._frames: CIFBlockFrames | None = None
         return
 
@@ -276,8 +276,57 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
         )
         return
 
+    def new(
+        self,
+        code: str | None = None,
+        content: DataFrameLike | None = None,
+        *,
+        variant: Literal["cif1", "mmcif"] | None = None,
+        validate: bool | None = None,
+        col_name_frame: str | None = None,
+        col_name_cat: str | None = None,
+        col_name_key: str | None = None,
+        col_name_values: str | None = None,
+    ) -> Self:
+        """Create a new `CIFBlock` with modified parameters.
+
+        Create a new `CIFBlock` object based on this one,
+        but with some parameters modified.
+        If an argument is `None`,
+        the corresponding attribute of self is used.
+
+        Parameters
+        ----------
+        code
+            Block code for the new CIFBlock.
+        content
+            Content DataFrame for the new CIFBlock.
+        variant
+            CIF variant for the new CIFBlock.
+        validate
+            Whether to validate the content DataFrame for the new CIFBlock.
+        col_name_frame
+            Name of the column for frame codes in the new CIFBlock.
+        col_name_cat
+            Name of the column for category codes in the new CIFBlock.
+        col_name_key
+            Name of the column for data item keys in the new CIFBlock.
+        col_name_values
+            Name of the column for data item values in the new CIFBlock.
+        """
+        return CIFBlock(
+            code=self.code if code is None else code,
+            content=self._df if content is None else content,
+            variant=self._variant if variant is None else variant,
+            validate=(False if content is None else True) if validate is None else validate,
+            col_name_frame=self._col_frame if col_name_frame is None else col_name_frame,
+            col_name_cat=self._col_cat if col_name_cat is None else col_name_cat,
+            col_name_key=self._col_key if col_name_key is None else col_name_key,
+            col_name_values=self._col_values if col_name_values is None else col_name_values,
+        )
+
     def __repr__(self) -> str:
-        return f"CIFBlock(code={self.code!r}, variant={self._variant!r}, categories={len(self.category_codes)})"
+        return f"CIFBlock(code={self.code!r}, type={self.type!r}, variant={self._variant!r}, categories={len(self.category_codes)})"
 
     def _get_categories(self) -> dict[str, CIFDataCategory]:
         """Load all data categories directly in the data block."""
@@ -304,32 +353,3 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
             self._categories[cat_name] = category
 
         return self._categories
-
-    def _get_part(self, part: Literal["data", "dict"]) -> pl.DataFrame:
-        """Get data/dictionary part of the data block.
-
-        Parameters
-        ----------
-        part
-            Part to extract; from:
-            - "data": Data items that are directly under the data block
-            - "dict": Dictionary items that are directly under the data block
-
-        Returns
-        -------
-        pl.DataFrame
-            Extracted part of the data block.
-        """
-        part = self._parts.get(part)
-        if part is not None:
-            return part
-
-        self._parts = {
-            "data": self._df,
-            "dict": pl.DataFrame(),
-        } if self._col_frame is None else extract_files(
-            df=self._df,
-            files={"data", "dict"},
-            col_name_frame=self._col_frame,
-        )
-        return self._parts[part]
