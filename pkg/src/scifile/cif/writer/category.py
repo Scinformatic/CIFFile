@@ -182,6 +182,13 @@ def write(
     None
         Uses the provided `writer` callable to output the CIF data category.
     """
+    if indent < 0 or indent_inner < 0:
+        raise ValueError("indent and indent_inner must be >= 0")
+    if space_items < 1:
+        raise ValueError("space_items must be >= 1")
+    if min_space_columns < 1:
+        raise ValueError("min_space_columns must be >= 1")
+
     cat = _normalize_data_values(
         table,
         bool_true=bool_true,
@@ -198,7 +205,133 @@ def write(
         reserved_words=reserved_words,
     )
 
+    names = list(cat.columns)
+    n_rows = cat.height
+    n_cols = len(names)
+    if n_cols == 0:
+        return
 
+    # Writing is inherently iterative. Convert once to Python strings.
+    rows: list[list[str]] = cat.select([pl.col(c) for c in names]).rows()
+
+    ind0 = " " * indent
+    ind_in = " " * (indent + indent_inner)
+
+    def _write_line(line: str, *, inner: bool = False) -> None:
+        writer((ind_in if inner else ind0) + line + "\n")
+
+    def _write_token(tok: str, *, inner: bool = False) -> None:
+        # Text fields must have ';' in column 1. Do not indent them.
+        if "\n" in tok:
+            # Ensure token begins with ";\n" and ends with "\n;" (already enforced by _to_text_field).
+            writer(tok)
+            if not tok.endswith("\n"):
+                writer("\n")
+            return
+        _write_line(tok, inner=inner)
+
+    def _any_multiline_token() -> bool:
+        for r in rows:
+            for v in r:
+                if "\n" in v:
+                    return True
+        return False
+
+    # If any value is a text field token, styles that place values on the same line as tags/other
+    # tokens can break CIF syntax. Force a safe vertical layout in that case.
+    has_text_fields = _any_multiline_token()
+    if has_text_fields:
+        if n_rows == 1 and not always_table:
+            list_style = "vertical"
+        else:
+            table_style = "vertical"
+
+    as_table = always_table or n_rows != 1
+
+    if not as_table:
+        row = rows[0]
+
+        if list_style == "horizontal":
+            sep_pairs = " " * space_items
+            parts: list[str] = []
+            for k, v in zip(names, row, strict=True):
+                # multiline tokens cannot appear on same line; forced away above.
+                parts.append(f"{k} {v}")
+            _write_line(sep_pairs.join(parts))
+
+        elif list_style == "tabular":
+            max_name = max(len(k) for k in names)
+            for k, v in zip(names, row, strict=True):
+                if "\n" in v:
+                    _write_line(k)
+                    _write_token(v)
+                else:
+                    pad = " " * (max_name - len(k) + min_space_columns)
+                    _write_line(f"{k}{pad}{v}")
+
+        elif list_style == "vertical":
+            for k, v in zip(names, row, strict=True):
+                _write_line(k)
+                _write_token(v)
+
+        else:
+            raise ValueError(f"Invalid list_style: {list_style!r}")
+
+        return
+
+    # ----- TABLE (loop_) -----
+    _write_line("loop_")
+
+    # Compute widths for tabular styles using written tokens (single-line only).
+    col_widths: list[int] = []
+    if table_style in {"tabular-horizontal", "tabular-vertical"}:
+        for j in range(n_cols):
+            w = len(names[j])
+            for i in range(n_rows):
+                w = max(w, len(rows[i][j]))
+            col_widths.append(w)
+
+    if table_style == "horizontal":
+        tokens: list[str] = []
+        tokens.extend(names)
+        for r in rows:
+            tokens.extend(r)
+        _write_line(" ".join(tokens), inner=True)
+
+    elif table_style == "tabular-horizontal":
+        hdr = [
+            names[j] + (" " * (col_widths[j] - len(names[j])))
+            for j in range(n_cols)
+        ]
+        _write_line((" " * min_space_columns).join(hdr), inner=True)
+        for r in rows:
+            vals = [
+                r[j] + (" " * (col_widths[j] - len(r[j])))
+                for j in range(n_cols)
+            ]
+            _write_line((" " * min_space_columns).join(vals), inner=True)
+
+    elif table_style == "tabular-vertical":
+        for k in names:
+            _write_line(k, inner=True)
+        for r in rows:
+            vals = [
+                r[j] + (" " * (col_widths[j] - len(r[j])))
+                for j in range(n_cols)
+            ]
+            _write_line((" " * min_space_columns).join(vals), inner=True)
+
+    elif table_style == "vertical":
+        for k in names:
+            _write_line(k, inner=True)
+        for r in rows:
+            for v in r:
+                _write_token(v, inner=True)
+
+    else:
+        raise ValueError(f"Invalid table_style: {table_style!r}")
+
+    return
 
 
 def _normalize_data_values(
@@ -348,7 +481,7 @@ def _normalize_data_values(
 
     # Evaluate the representability check only once.
     if unrepresentable_checks:
-        bad_any = df.select(pl.any_horizontal(unrepresentable_checks).alias("_bad")).item()
+        bad_any = df.select(pl.any_horizontal(unrepresentable_checks).any().alias("_bad")).item()
         if bool(bad_any):
             raise ValueError(
                 "At least one multiline string contains a line beginning with ';'. "
@@ -472,7 +605,7 @@ def _is_safe_for_single_quotes(s: pl.Expr) -> pl.Expr:
     the internal `'` is followed by `s`, not whitespace.
 
     This expression is True iff there is no occurrence of `'` that is followed by
-    whitespace or end-of-string.
+    whitespace, and the string does not end with `'`.
 
     Parameters
     ----------
@@ -484,7 +617,9 @@ def _is_safe_for_single_quotes(s: pl.Expr) -> pl.Expr:
     pl.Expr
         Boolean expression: True means single-quoting is syntactically safe.
     """
-    return ~s.str.contains(r"'(?=\s|$)")
+    followed_by_ws = s.str.contains(r"'[ \t\r\n]")
+    trailing = s.str.ends_with("'")
+    return ~(followed_by_ws | trailing)
 
 
 def _is_safe_for_double_quotes(s: pl.Expr) -> pl.Expr:
@@ -493,6 +628,9 @@ def _is_safe_for_double_quotes(s: pl.Expr) -> pl.Expr:
     Same rule as for single quotes:
     the delimiter character `"` may appear inside the
     quoted string only if it is NOT followed by whitespace or end-of-string.
+
+    This expression is True iff there is no occurrence of `"` that is followed by
+    whitespace, and the string does not end with `"`.
 
     Parameters
     ----------
@@ -504,7 +642,9 @@ def _is_safe_for_double_quotes(s: pl.Expr) -> pl.Expr:
     pl.Expr
         Boolean expression: True means double-quoting is syntactically safe.
     """
-    return ~s.str.contains(r'"(?=\s|$)')
+    followed_by_ws = s.str.contains(r'"[ \t\r\n]')
+    trailing = s.str.ends_with('"')
+    return ~(followed_by_ws | trailing)
 
 
 def _to_text_field(s: pl.Expr) -> pl.Expr:
