@@ -5,10 +5,8 @@ from typing import Literal, Self, Iterator, Callable, Sequence
 import polars as pl
 
 from scifile.typing import DataFrameLike
-from ._category import CIFDataCategory
-from ._util import extract_files, extract_categories
 from ._block import CIFBlock
-from ._base import CIFFileSkeleton
+from ._skel import CIFFileSkeleton
 
 
 class CIFFile(CIFFileSkeleton):
@@ -49,129 +47,6 @@ class CIFFile(CIFFileSkeleton):
         if self._block_codes is None:
             self._block_codes = self._df[self._col_block].unique()
         return self._block_codes
-
-    def file(
-        self,
-        *file: Literal["data", "dict", "dict_cat", "dict_key"],
-    ) -> Self | None | dict[str, Self | None]:
-        """Isolate data/dictionary parts of the CIF file.
-
-        Parameters
-        ----------
-        *file
-            Parts to extract; from:
-            - "data": Data file,
-              i.e., data items that are directly under a data block
-              (and not in any save frames).
-            - "dict": Dictionary file,
-              i.e., data items that are in save frames.
-            - "dict_cat": Category dictionary file,
-              i.e., data items that are in save frames without a frame code keyword
-              (no period in the frame code).
-            - "dict_key": Key dictionary file,
-              i.e., data items that are in save frames with a frame code keyword
-              (period in the frame code).
-
-            If none provided, all parts found in the CIF file are extracted.
-
-        Returns
-        -------
-        isolated_files
-            A single `CIFFile` if only one part is requested,
-            or a dictionary of `CIFFile` objects
-            keyed by part name otherwise.
-        """
-        filetypes = set(file) if file else {"data", "dict", "dict_cat", "dict_key"}
-        if self.type == "data":
-            # Only data part exists
-            out = {
-                "data": self,
-                "dict": None,
-                "dict_cat": None,
-                "dict_key": None,
-            }
-            if len(filetypes) == 1:
-                return out[next(iter(filetypes))]
-            return {part: out[part] for part in filetypes}
-
-        dfs = extract_files(
-            df=self._df,
-            files=filetypes,
-            col_name_frame=self._col_frame,
-        )
-
-        files = {
-            part: (CIFFile(
-                content=sub_df,
-                variant=self._variant,
-                validate=False,
-                col_name_block=self._col_block,
-                col_name_frame=self._col_frame,
-                col_name_cat=self._col_cat,
-                col_name_key=self._col_key,
-                col_name_values=self._col_values,
-            ) if not sub_df.is_empty() else None)
-            for part, sub_df in dfs.items()
-        }
-
-        if len(filetypes) == 1:
-            return files[next(iter(filetypes))]
-        return files
-
-    def category(
-        self,
-        *category: str,
-        col_name_block: str | None = "_block",
-        col_name_frame: str | None = "_frame",
-        drop_redundant: bool = True,
-    ) -> CIFDataCategory | dict[str, CIFDataCategory]:
-        """Extract data category tables from all data blocks/save frames.
-
-        Parameters
-        ----------
-        *category
-            Names of data categories to extract.
-            If none provided, all categories found in the CIF file are extracted.
-        col_name_block
-            Name of the column to use for block codes in the output tables.
-        col_name_frame
-            Name of the column to use for frame codes in the output tables.
-        drop_redundant
-            Whether to drop block/frame code columns
-            if they have the same value for all rows.
-
-        Returns
-        -------
-        data_category_tables
-            A single `CIFDataCategory` if only one category is requested,
-            or a dictionary of `CIFDataCategory` objects
-            keyed by category name otherwise.
-        """
-        dfs, out_col_block, out_col_frame = extract_categories(
-            self._df,
-            categories=set(category),
-            col_name_block=self._col_block,
-            col_name_frame=self._col_frame,
-            col_name_cat=self._col_cat,
-            col_name_key=self._col_key,
-            col_name_values=self._col_values,
-            new_col_name_block=col_name_block,
-            new_col_name_frame=col_name_frame,
-            drop_redundant=drop_redundant,
-        )
-        cats = {
-            cat_name: CIFDataCategory(
-                code=cat_name,
-                content=table,
-                variant=self._variant,
-                col_name_block=out_col_block,
-                col_name_frame=out_col_frame,
-            )
-            for cat_name, table in dfs.items()
-        }
-        if len(cats) == 1:
-            return next(iter(cats.values()))
-        return cats
 
     def blocks(self) -> Iterator[CIFBlock]:
         """Iterate over data blocks in the CIF file."""
@@ -229,6 +104,63 @@ class CIFFile(CIFFileSkeleton):
                 delimiter_preference=delimiter_preference,
             )
         return
+
+    def new(
+        self,
+        content: DataFrameLike | None = None,
+        *,
+        variant: Literal["cif1", "mmcif"] | None = None,
+        validate: bool | None = None,
+        col_name_block: str | None = None,
+        col_name_frame: str | None = None,
+        col_name_cat: str | None = None,
+        col_name_key: str | None = None,
+        col_name_values: str | None = None,
+    ) -> Self:
+        """Create a new `CIFFile` object.
+
+        Parameters
+        ----------
+        content
+            Content DataFrame for the new CIF file.
+            If `None`, an empty DataFrame is used.
+        variant
+            CIF variant for the new CIF file.
+            If `None`, the same variant as this CIF file is used.
+        validate
+            Whether to validate the content DataFrame for the new CIF file.
+            If `None`, the same setting as this CIF file is used.
+        col_name_block
+            Name of the column to use for block codes in the new CIF file.
+            If `None`, the same column name as this CIF file is used.
+        col_name_frame
+            Name of the column to use for frame codes in the new CIF file.
+            If `None`, the same column name as this CIF file is used.
+        col_name_cat
+            Name of the column to use for category codes in the new CIF file.
+            If `None`, the same column name as this CIF file is used.
+        col_name_key
+            Name of the column to use for key codes in the new CIF file.
+            If `None`, the same column name as this CIF file is used.
+        col_name_values
+            Name of the column to use for value codes in the new CIF file.
+            If `None`, the same column name as this CIF file is used.
+
+        Returns
+        -------
+        new_cif_file
+            The new `CIFFile` object.
+        """
+        return CIFFile(
+            content=content if content is not None else pl.DataFrame(),
+            variant=variant if variant is not None else self._variant,
+            validate=validate if validate is not None else self._validate,
+            col_name_block=col_name_block if col_name_block is not None else self._col_block,
+            col_name_frame=col_name_frame if col_name_frame is not None else self._col_frame,
+            col_name_cat=col_name_cat if col_name_cat is not None else self._col_cat,
+            col_name_key=col_name_key if col_name_key is not None else self._col_key,
+            col_name_values=col_name_values if col_name_values is not None else self._col_values,
+        )
 
     def __iter__(self) -> Iterator[str]:
         """Iterate over block codes in the CIF file."""
