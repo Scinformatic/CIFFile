@@ -2,6 +2,8 @@ from typing import Literal, Callable, Sequence
 
 import polars as pl
 
+from scifile.cif.writer.category import write
+
 
 class CIFDataCategory:
     """CIF file data category."""
@@ -37,30 +39,192 @@ class CIFDataCategory:
         self,
         writer: Callable[[str], None],
         *,
-        loop: bool = False,
+        # String casting parameters
+        bool_true: str = "YES",
+        bool_false: str = "NO",
+        null_str: Literal[".", "?"] = "?",
+        null_float: Literal[".", "?"] = "?",
+        null_int: Literal[".", "?"] = "?",
+        null_bool: Literal[".", "?"] = "?",
+        empty_str: Literal[".", "?"] = ".",
+        nan_float: Literal[".", "?"] = ".",
+        # Styling parameters
+        always_table: bool = False,
+        list_style: Literal["horizontal", "tabular", "vertical"] = "tabular",
+        table_style: Literal["horizontal", "tabular-horizontal", "tabular-vertical", "vertical"] = "tabular-horizontal",
+        space_items: int = 2,
+        min_space_columns: int = 2,
+        indent: int = 0,
+        indent_inner: int = 0,
+        delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
     ) -> None:
-        """Write CIF data category to writer.
+        """Write this data category in CIF format.
 
         Parameters
         ----------
-        writer
-            A callable that takes a string and writes it to the desired output.
-            This could be a file write method or any other string-consuming function.
-            For example, you can create a list and pass its `append` method
-            to collect the output chunks into the list.
-            The whole CIF content can then be obtained by joining the list elements,
-            i.e., `''.join(output_list)`.
-        loop
-            Whether to write the data category in loop format
-            even if it contains only a single row.
+        bool_true
+            Symbol to use for boolean `True` values.
+        bool_false
+            Symbol to use for boolean `False` values.
+        null_str
+            Symbol to use for null values in string columns.
+        null_float
+            Symbol to use for null values in floating-point columns.
+        null_int
+            Symbol to use for null values in integer columns.
+        null_bool
+            Symbol to use for null values in boolean columns.
+        empty_str
+            Symbol to use for empty strings in string columns.
+        nan_float
+            Symbol to use for NaN values in floating-point columns.
+        always_table
+            Whether to write the data category in table format
+            even if it is a list (i.e., contains only a single row).
             When `False` (default),
-            single-row categories are written in simple key-value format.
+            single-row categories are written as lists.
+        list_style
+            Style to use when writing a list (single-row category).
+            Options:
+            - "horizontal": All data items on a single line, separated by spaces:
+            ```
+            _name1 value1 _long_name2 value2 _name3 value3 ...
+            ```
+            - "tabular": Each data item on its own line, aligned in a table:
+            ```
+            _name1       value1
+            _long_name2  value2
+            _name3       value3
+            ...
+            ```
+            - "vertical": Each token on its own line:
+            ```
+            _name1
+            value1
+            _long_name2
+            value2
+            _name3
+            value3
+            ...
+            ```
+        table_style
+            Style to use when writing a table (multi-row category).
+            Options:
+            - "horizontal": All tokens on a single line, separated by spaces:
+            ```
+            loop_ _name1 _long_name2 _name3 value1_1 value2_1 value3_1 value1_2 value2_2 value3_2 ...
+            ```
+            - "tabular-horizontal": Each row (including headers) on its own line,
+            aligned in a table:
+            ```
+            loop_
+            _name1    _long_name2  _name3
+            value1_1  value2_1     value3_1
+            value1_2  value2_2     value3_2
+            ...
+            ```
+            - "tabular-vertical": Vertical header with each row on its own line,
+            aligned in a table:
+            ```
+            loop_
+            _name1
+            _long_name2
+            _name3
+            value1_1  value2_1  value3_1
+            value1_2  value2_2  value3_2
+            ...
+            ```
+            - "vertical": Each token on its own line:
+            ```
+            loop_
+            _name1
+            _long_name2
+            _name3
+            value1_1
+            value2_1
+            value3_1
+            value1_2
+            value2_2
+            value3_2
+            ...
+            ```
+        space_items
+            Number of spaces to use
+            between name-value pairs in horizontal lists:
+            ```
+            _name1 value1<space_items>_long_name2 value2 ...
+            ```
+        min_space_columns
+            Minimum number of spaces to use
+            between columns in tabular formats:
+            ```
+            _name1  <min_space_columns>_long_name2<min_space_columns>_name3
+            value1_1<min_space_columns>value2_1   <min_space_columns>value3_1
+            ...
+            ```
+        indent
+            Number of spaces to indent each line
+            of the overall data category output:
+            ```
+            <indent>loop_
+            <indent>_name1 _name2 ...
+            <indent>value1_1 value2_1 ...
+            ```
+        indent_inner
+            Number of spaces to indent each line
+            inside loop constructs (table body):
+            ```
+            loop_
+            <indent_inner>_name1 _name2 ...
+            <indent_inner>value1_1 value2_1 ...
+            ```
+        delimiter_preference
+            Order of preference for string delimiters/quotations,
+            from most to least preferred.
+
+        Returns
+        -------
+        None
+            Uses the provided `writer` callable to output the CIF data category.
+
+        Raises
+        ------
+        TypeError
+            If the input DataFrame contains unsupported dtypes.
+        ValueError
+            If any multiline string contains a line beginning with ';',
+            which cannot be represented exactly as a CIF 1.1 text field.
         """
-        # Write category data items
-        for row in self._table.iter_rows(named=True):
-            key = row[self._col_key]
-            values = row[self._col_values]
-            writer(f"_{self._name}.{key} {values}\n")
+        df = self._table
+        if self._variant == "mmcif":
+            # Set column names to full data names
+            df = df.select(pl.all().name.prefix(f"_{self._name}."))
+        write(
+            df,
+            writer,
+            bool_true=bool_true,
+            bool_false=bool_false,
+            null_str=null_str,
+            null_float=null_float,
+            null_int=null_int,
+            null_bool=null_bool,
+            empty_str=empty_str,
+            nan_float=nan_float,
+            always_table=always_table,
+            list_style=list_style,
+            table_style=table_style,
+            space_items=space_items,
+            min_space_columns=min_space_columns,
+            indent=indent,
+            indent_inner=indent_inner,
+            delimiter_preference=delimiter_preference,
+        )
+        return
+
+    def __str__(self) -> str:
+        chunks = []
+        self.write(chunks.append)
+        return "".join(chunks)
 
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._name!r}, shape={self._table.shape})"
