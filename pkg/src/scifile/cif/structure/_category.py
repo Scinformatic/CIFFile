@@ -4,36 +4,34 @@ import polars as pl
 
 from scifile.cif.writer.category import write
 
+from ._base import CIFSkeleton
 
-class CIFDataCategory:
+
+class CIFDataCategory(CIFSkeleton):
     """CIF file data category."""
 
     def __init__(
         self,
-        name: str,
-        table: pl.DataFrame,
+        code: str,
+        content: pl.DataFrame,
         *,
         variant: Literal["cif1", "mmcif"],
         col_name_block: str | None = None,
         col_name_frame: str | None = None,
     ):
-
-        self._name = name
-        self._table = table
-        self._variant = variant
+        super().__init__(
+            content=content,
+            variant=variant,
+        )
+        self._code = code
         self._col_block = col_name_block
         self._col_frame = col_name_frame
         return
 
     @property
-    def name(self) -> str:
+    def code(self) -> str:
         """Data category name."""
-        return self._name
-
-    @property
-    def table(self) -> pl.DataFrame:
-        """Data category table."""
-        return self._table
+        return self._code
 
     def write(
         self,
@@ -195,10 +193,11 @@ class CIFDataCategory:
             If any multiline string contains a line beginning with ';',
             which cannot be represented exactly as a CIF 1.1 text field.
         """
-        df = self._table
+        exclude_columns = [col for col in (self._col_block, self._col_frame) if col is not None]
+        df = self.df.select(pl.exclude(exclude_columns))
         if self._variant == "mmcif":
             # Set column names to full data names
-            df = df.select(pl.all().name.prefix(f"_{self._name}."))
+            df = df.select(pl.all().name.prefix(f"_{self._code}."))
         write(
             df,
             writer,
@@ -222,4 +221,4 @@ class CIFDataCategory:
         return
 
     def __repr__(self) -> str:
-        return f"CIFDataCategory(name={self._name!r}, shape={self._table.shape})"
+        return f"CIFDataCategory(name={self._code!r}, shape={self._table.shape})"
