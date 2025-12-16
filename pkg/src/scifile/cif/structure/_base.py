@@ -1,3 +1,5 @@
+"""CIF data structure base classes."""
+
 from abc import abstractmethod, ABCMeta
 from typing import Callable, Literal
 
@@ -13,9 +15,10 @@ class CIFSkeleton(metaclass=ABCMeta):
 
     def __init__(
         self,
-        content: DataFrameLike,
         *,
+        content: DataFrameLike,
         variant: Literal["cif1", "mmcif"],
+        **_: object,
     ) -> None:
         self._df = content if isinstance(content, pl.DataFrame) else pl.DataFrame(content)
         self._variant: Literal["cif1", "mmcif"] = variant
@@ -48,9 +51,8 @@ class CIFBlockSkeleton(CIFSkeleton):
 
     def __init__(
         self,
-        content: DataFrameLike,
         *,
-        variant: Literal["cif1", "mmcif"],
+        content: DataFrameLike,
         validate: bool,
         require_block: bool,
         require_frame: bool,
@@ -59,6 +61,7 @@ class CIFBlockSkeleton(CIFSkeleton):
         col_name_cat: str,
         col_name_key: str,
         col_name_values: str,
+        **kwargs,
     ) -> None:
         if validate:
             content = validate_content_df(
@@ -72,10 +75,7 @@ class CIFBlockSkeleton(CIFSkeleton):
                 col_name_values=col_name_values,
             )
 
-        super().__init__(
-            content=content,
-            variant=variant,
-        )
+        super().__init__(content=content, **kwargs)
 
         self._col_block = col_name_block
         self._col_frame = col_name_frame
@@ -90,30 +90,11 @@ class CIFFileSkeleton(CIFBlockSkeleton):
 
     def __init__(
         self,
-        content: DataFrameLike,
         *,
-        variant: Literal["cif1", "mmcif"],
-        validate: bool,
-        require_block: bool,
-        require_frame: bool,
-        col_name_block: str | None,
         col_name_frame: str | None,
-        col_name_cat: str,
-        col_name_key: str,
-        col_name_values: str,
+        **kwargs,
     ) -> None:
-        super().__init__(
-            content=content,
-            variant=variant,
-            validate=validate,
-            require_block=require_block,
-            require_frame=require_frame,
-            col_name_block=col_name_block,
-            col_name_frame=col_name_frame,
-            col_name_cat=col_name_cat,
-            col_name_key=col_name_key,
-            col_name_values=col_name_values,
-        )
+        super().__init__(**kwargs)
         if col_name_frame in self.df.columns:
             if self.df.select(pl.col(col_name_frame).is_null().all()).item():
                 self._df = self.df.drop(col_name_frame)
