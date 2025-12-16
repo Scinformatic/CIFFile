@@ -4,7 +4,7 @@ import polars as pl
 
 from scifile.cif.writer.category import write
 
-from ._base import CIFSkeleton
+from ._skel import CIFSkeleton
 
 
 class CIFDataCategory(CIFSkeleton):
@@ -221,4 +221,4 @@ class CIFDataCategory(CIFSkeleton):
         return
 
     def __repr__(self) -> str:
-        return f"CIFDataCategory(name={self._code!r}, shape={self._table.shape})"
+        return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
