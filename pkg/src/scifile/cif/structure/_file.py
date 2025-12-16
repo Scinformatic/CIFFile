@@ -1,20 +1,18 @@
-from typing import Literal, Any, Self
+"""CIF file data structure."""
+
+from typing import Literal, Self, Iterator, Callable, Sequence
 
 import polars as pl
 
 from scifile.typing import DataFrameLike
-from scifile.cif.typing import BlockCode, FrameCode, DataCategory, DataKeyword, DataValues
 from ._category import CIFDataCategory
-from ._util import extract_files, extract_categories, validate_content_df
+from ._util import extract_files, extract_categories
+from ._block import CIFBlock
+from ._base import CIFFileSkeleton
 
 
-class CIFFile:
-    """CIF file data structure.
-
-    Parameters
-    ----------
-
-    """
+class CIFFile(CIFFileSkeleton):
+    """CIF file."""
     def __init__(
         self,
         content: DataFrameLike,
@@ -27,52 +25,22 @@ class CIFFile:
         col_name_key: str,
         col_name_values: str,
     ):
-        df = validate_content_df(
-            content,
+        super().__init__(
+            content=content,
+            variant=variant,
+            validate=validate,
+            require_block=True,
+            require_frame=False,
             col_name_block=col_name_block,
             col_name_frame=col_name_frame,
             col_name_cat=col_name_cat,
             col_name_key=col_name_key,
             col_name_values=col_name_values,
-        ) if validate else pl.DataFrame(content)
-        if col_name_frame in df.columns:
-            if df.select(pl.col(col_name_frame).is_null().all()).item():
-                df = df.drop(col_name_frame)
-                col_name_frame = None
-                filetype = "data"
-            else:
-                filetype = "dict"
-        else:
-            col_name_frame = None
-            filetype = "data"
-
-        self._df = df
-        self._variant: Literal["cif1", "mmcif"] = variant
-        self._col_block = col_name_block
-        self._col_frame = col_name_frame
-        self._col_cat = col_name_cat
-        self._col_key = col_name_key
-        self._col_values = col_name_values
-        self._filetype = filetype
+        )
 
         self._block_codes: pl.Series = None
-
+        self._blocks: dict[str, CIFBlock] = {}
         return
-
-    @property
-    def type(self) -> Literal["data", "dict"]:
-        """Type of CIF file
-
-        Either:
-        - "data": File contains no save frames; all data items are directly under data blocks.
-        - "dict": File contains save frames; some data items are under save frames.
-        """
-        return self._filetype
-
-    @property
-    def df(self) -> pl.DataFrame:
-        """DataFrame representation of the CIF file."""
-        return self._df
 
     @property
     def block_codes(self) -> pl.Series:
@@ -80,11 +48,6 @@ class CIFFile:
         if self._block_codes is None:
             self._block_codes = self._df[self._col_block].unique()
         return self._block_codes
-
-    @property
-    def block_count(self) -> int:
-        """Number of data blocks in the CIF file."""
-        return self.block_codes.shape[0]
 
     def file(
         self,
@@ -154,29 +117,6 @@ class CIFFile:
             return files[next(iter(filetypes))]
         return files
 
-    def block(self, block: str | int = 0):
-        """Extract a data block by its block code or index.
-
-        Parameters
-        ----------
-        block
-            Block code (str) or index (int) of the data block to extract.
-
-        Returns
-        -------
-        data_block
-            The extracted data block.
-        """
-        block_code = (
-            self.block_codes[block]
-            if isinstance(block, int) else
-            block
-        )
-        return DDL2CIFBlock(
-            block_code=block_code,
-            df=self.df.filter(pl.col("block_code") == block_code).select(pl.exclude("block_code")),
-        )
-
     def category(
         self,
         *category: str,
@@ -231,3 +171,97 @@ class CIFFile:
         if len(cats) == 1:
             return next(iter(cats.values()))
         return cats
+
+    def blocks(self) -> Iterator[CIFBlock]:
+        """Iterate over data blocks in the CIF file."""
+        for block_code in self.block_codes:
+            yield self[block_code]
+
+    def write(
+        self,
+        writer: Callable[[str], None],
+        *,
+        # String casting parameters
+        bool_true: str = "YES",
+        bool_false: str = "NO",
+        null_str: Literal[".", "?"] = "?",
+        null_float: Literal[".", "?"] = "?",
+        null_int: Literal[".", "?"] = "?",
+        null_bool: Literal[".", "?"] = "?",
+        empty_str: Literal[".", "?"] = ".",
+        nan_float: Literal[".", "?"] = ".",
+        # Styling parameters
+        always_table: bool = False,
+        list_style: Literal["horizontal", "tabular", "vertical"] = "tabular",
+        table_style: Literal["horizontal", "tabular-horizontal", "tabular-vertical", "vertical"] = "tabular-horizontal",
+        space_items: int = 2,
+        min_space_columns: int = 2,
+        indent: int = 0,
+        indent_inner: int = 0,
+        delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
+    ) -> None:
+        """Write this CIF file in CIF format.
+
+        Parameters
+        ----------
+        bool_true
+            Symbol to use for boolean `True` values.
+        """
+        for block in self.blocks():
+            block.write(
+                writer,
+                bool_true=bool_true,
+                bool_false=bool_false,
+                null_str=null_str,
+                null_float=null_float,
+                null_int=null_int,
+                null_bool=null_bool,
+                empty_str=empty_str,
+                nan_float=nan_float,
+                always_table=always_table,
+                list_style=list_style,
+                table_style=table_style,
+                space_items=space_items,
+                min_space_columns=min_space_columns,
+                indent=indent,
+                indent_inner=indent_inner,
+                delimiter_preference=delimiter_preference,
+            )
+        return
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over block codes in the CIF file."""
+        for block_code in self.block_codes:
+            yield block_code
+
+    def __getitem__(self, block_id: str | int) -> CIFBlock:
+        """Get a data block by its block code or index."""
+        block_code = (
+            self.block_codes[block_id]
+            if isinstance(block_id, int) else
+            block_id
+        )
+        if block_code in self._blocks:
+            return self._blocks[block_code]
+        block = CIFBlock(
+            code=block_code,
+            content=self.df.filter(
+                pl.col(self._col_block) == block_code
+            ).select(pl.exclude(self._col_block)),
+            variant=self._variant,
+            validate=False,
+            col_name_frame=self._col_frame,
+            col_name_cat=self._col_cat,
+            col_name_key=self._col_key,
+            col_name_values=self._col_values,
+        )
+        self._blocks[block_code] = block
+        return block
+
+    def __len__(self) -> int:
+        """Number of data blocks in the CIF file."""
+        return self.block_codes.shape[0]
+
+    def __repr__(self) -> str:
+        """Representation of the CIF file."""
+        return f"CIFFile(type={self.type!r}, variant={self._variant!r}, blocks={len(self)!r})"
