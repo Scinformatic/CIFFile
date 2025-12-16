@@ -275,6 +275,8 @@ def validate_content_df(
         - If the `content` cannot be converted to a Polars DataFrame,
         - If required columns (i.e., `col_name_key`, `col_name_values`,
           plus others depending on specified `require_*` parameters) are missing,
+        - If there are duplicated rows based on (block, frame, category, key) codes,
+        - If block, frame, category, or key columns contain empty strings,
         - If data types of columns cannot be converted as expected,
         - If rows with same (block, frame, category) codes (those that are provided)
           have "values" lists of different lengths.
@@ -361,6 +363,31 @@ def validate_content_df(
         raise ValueError(f"Column {col_name_values!r} must not contain null elements (expected List[str]).")
 
     # -------------------------
+    # Empty-string validation (non-null strings must not be "")
+    # -------------------------
+    string_cols: list[str] = [
+        c
+        for c in (col_name_block, col_name_frame, col_name_cat, col_name_key)
+        if c is not None and c in df.columns
+    ]
+
+    if string_cols:
+        df_idx = df.with_row_index("_row")
+        empty_exprs = [
+            pl.col(c).is_not_null() & (pl.col(c).str.len_chars() == 0)
+            for c in string_cols
+        ]
+        bad = df_idx.filter(pl.any_horizontal(empty_exprs)).select(["_row", *string_cols])
+
+        if bad.height:
+            rows_preview = bad.head(50).to_dicts()
+            more = "" if bad.height <= 50 else f" (showing first 50 of {bad.height})"
+            raise ValueError(
+                f"Empty string values found in columns {string_cols}{more}. "
+                f"Problematic rows: {rows_preview}"
+            )
+
+    # -------------------------
     # Length consistency within groups
     # Group by whichever of (block, frame, category) columns are PRESENT (not "required")
     # -------------------------
@@ -379,6 +406,33 @@ def validate_content_df(
             raise ValueError(
                 f"All rows must have {col_name_values!r} lists of the same length "
                 f"(no {col_name_block!r}/{col_name_frame!r}/{col_name_cat!r} columns present)."
+            )
+
+    # -------------------------
+    # Duplicate row validation based on identity codes
+    # (block, frame, category, key) that are provided
+    # -------------------------
+    id_cols: list[str] = [
+        c
+        for c in (col_name_block, col_name_frame, col_name_cat, col_name_key)
+        if c is not None and c in df.columns
+    ]
+
+    if id_cols:
+        df_idx = df.with_row_index("_row")
+        dups = (
+            df_idx
+            .group_by(id_cols)
+            .agg(pl.col("_row").alias("_rows"), pl.len().alias("_n"))
+            .filter(pl.col("_n") > 1)
+        )
+
+        if dups.height:
+            preview = dups.head(50).to_dicts()
+            more = "" if dups.height <= 50 else f" (showing first 50 of {dups.height})"
+            raise ValueError(
+                f"Duplicate rows detected based on columns {id_cols}{more}. "
+                f"Conflicting groups (with row indices): {preview}"
             )
 
     # -------------------------
