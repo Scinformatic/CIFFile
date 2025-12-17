@@ -1,3 +1,5 @@
+"""CIF file data structure."""
+
 from typing import Literal
 
 from ._block import CIFBlock
