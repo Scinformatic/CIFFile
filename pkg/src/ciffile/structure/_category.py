@@ -1,4 +1,6 @@
-from typing import Literal, Callable, Sequence
+"""CIF category data structure."""
+
+from typing import Literal, Callable, Sequence, Iterator, overload
 
 import polars as pl
 
@@ -32,6 +34,11 @@ class CIFDataCategory(CIFSkeleton):
     def code(self) -> str:
         """Data category name."""
         return self._code
+
+    @property
+    def keyword_codes(self) -> list[str]:
+        """Data item (column) names in this data category."""
+        return self._df.columns
 
     def write(
         self,
@@ -220,9 +227,45 @@ class CIFDataCategory(CIFSkeleton):
         )
         return
 
-    def __getitem__(self, key: str) -> pl.Series:
-        """Get a data item (column) by its name."""
-        return self._df[key]
+    def __iter__(self) -> Iterator[pl.Series]:
+        """Iterate over data item columns in the category."""
+        for keyword_code in self.keyword_codes:
+            yield self[keyword_code]
+
+    @overload
+    def __getitem__(self, keyword_id: str | int) -> pl.Series: ...
+    @overload
+    def __getitem__(self, keyword_id: tuple[str | int, ...] | slice[int]) -> pl.DataFrame: ...
+    def __getitem__(
+        self,
+        keyword_id: str | int | tuple[str | int, ...] | slice[int]
+    ) -> pl.Series | pl.DataFrame:
+        """Get a data item (column) by its name or index."""
+        if isinstance(keyword_id, str | int):
+            keyword_id = (keyword_id,)
+            single = True
+        else:
+            single = False
+
+        if isinstance(keyword_id, tuple):
+            codes = [
+                self.keyword_codes[cat_id]
+                if isinstance(cat_id, int)
+                else cat_id
+                for cat_id in keyword_id
+            ]
+        elif isinstance(keyword_id, slice):
+            codes = self.keyword_codes[keyword_id]
+        else:
+            raise TypeError("keyword_id must be str, int, tuple, or slice")
+
+        if single:
+            return self._df.select(pl.col(codes[0])).to_series()
+        return self._df.select(pl.col(codes))
+
+    def __len__(self) -> int:
+        """Number of data items (columns) in this data category."""
+        return self._df.width
 
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
