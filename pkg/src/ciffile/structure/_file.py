@@ -184,6 +184,10 @@ class CIFFile(CIFFileSkeleton):
         self._blocks[block_code] = block
         return block
 
+    def __contains__(self, block_code: str) -> bool:
+        """Check if a data block with the given block code exists in the CIF file."""
+        return block_code in self.block_codes
+
     def __len__(self) -> int:
         """Number of data blocks in the CIF file."""
         return len(self.block_codes)
