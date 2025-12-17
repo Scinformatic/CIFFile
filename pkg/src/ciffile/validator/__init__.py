@@ -4,24 +4,38 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ._validator import CIFFileValidator
+from ._ddl2 import DDL2Validator
 
 if TYPE_CHECKING:
-    import polars as pl
-    from ._exception import CIFValidationError
+    from ciffile.structure import CIFFile
 
 
-def validate(df: pl.DataFrame) -> list[CIFValidationError]:
-    """Validate a CIF file represented as a DataFrame.
+__all__ = [
+    "DDL2Validator",
+    "dictionary",
+]
+
+
+def dictionary(
+    file: CIFFile,
+    *,
+    variant: str = "ddl2",
+) -> DDL2Validator:
+    """Create a CIF file validator from a CIF dictionary.
 
     Parameters
     ----------
-    df
-        DataFrame representation of the CIF file to be validated.
+    file
+        CIF dictionary file.
+    variant
+        Dictionary definition language variant.
+        Currently, only "ddl2" is supported.
 
     Returns
     -------
-    validation_errors
-        List of validation errors encountered during validation.
+    CIFFileValidator
+        CIF file validator instance.
     """
-    return CIFFileValidator(df=df).validate()
+    if variant == "ddl2":
+        return DDL2Validator(file)
+    raise ValueError(f"Unsupported dictionary variant: {variant!r}")
