@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from typing import Iterator
+from typing import TYPE_CHECKING, overload
 
 import polars as pl
 
-from ._category import CIFDataCategory
-
 
 if TYPE_CHECKING:
-    from typing import Literal
-    from ciffile.typing import DataFrameLike
+    from typing import Iterator
+    from ._category import CIFDataCategory
 
 
 class CIFBlockLike:
@@ -23,7 +19,7 @@ class CIFBlockLike:
         super().__init__(**kwargs)
         self._code = code
 
-        self._category_codes: pl.Series | None = None
+        self._category_codes: list[str] = []
         self._categories: dict[str, CIFDataCategory] = {}
         return
 
@@ -33,22 +29,29 @@ class CIFBlockLike:
         return self._code
 
     @property
-    def category_codes(self) -> pl.Series:
-        """Unique data category names in the data block/save frame."""
-        if self._category_codes is None:
-            self._category_codes = self._df[self._col_cat].unique()
+    def category_codes(self) -> list[str]:
+        """Unique data category names directly in the data block/save frame."""
+        if not self._category_codes:
+            df = self.df
+            if self._col_frame is not None:
+                df = df.filter(pl.col(self._col_frame).is_null())
+            self._category_codes = (
+                df
+                .select(pl.col(self._col_cat).unique(maintain_order=True))
+                .to_series()
+                .to_list()
+            )
         return self._category_codes
 
-    def categories(self) -> Iterator[CIFDataCategory]:
+    def __iter__(self) -> Iterator[CIFDataCategory]:
         """Iterate over data categories in the data block/save frame."""
-        for category in self._get_categories().values():
-            yield category
+        for category_code in self.category_codes:
+            yield self[category_code]
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over data category codes in the data block/save frame."""
-        for cat_code in self.category_codes:
-            yield cat_code
-
+    @overload
+    def __getitem__(self, category_id: str | int) -> CIFDataCategory: ...
+    @overload
+    def __getitem__(self, category_id: tuple[str | int, ...] | slice[int]) -> list[CIFDataCategory]: ...
     def __getitem__(
         self,
         category_id: str | int | tuple[str | int, ...] | slice[int]
@@ -68,7 +71,7 @@ class CIFBlockLike:
                 for cat_id in category_id
             ]
         elif isinstance(category_id, slice):
-            codes = self.category_codes[category_id].to_list()
+            codes = self.category_codes[category_id]
         else:
             raise TypeError("category_id must be str, int, tuple, or slice")
 
@@ -80,5 +83,5 @@ class CIFBlockLike:
         return out
 
     def __len__(self) -> int:
-        """Number of data categories directly under this data block/save frame."""
+        """Number of data categories directly in this data block/save frame."""
         return len(self.category_codes)
