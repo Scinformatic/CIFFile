@@ -1,6 +1,6 @@
 """CIF block data structure."""
 
-from typing import Literal, Iterator, Callable, Sequence, Self
+from typing import Literal, Iterator, Callable, Sequence, Self, overload
 
 import polars as pl
 
@@ -31,19 +31,15 @@ class CIFBlockFrames:
         self._col_key = col_name_key
         self._col_values = col_name_values
 
-        self._codes: pl.Series | None = None
+        self._codes: list[str] = []
         self._frames: dict[str, CIFFrame] = {}
         return
 
     @property
-    def codes(self) -> pl.Series:
+    def codes(self) -> list[str]:
         """Unique frame codes in the data block."""
-        if self._codes is None:
-            self._codes = (
-                self._df[self._col_frame].unique()
-                if self._has_frames else
-                pl.Series([], dtype=pl.Utf8)
-            )
+        if not self._codes and self._has_frames:
+            self._codes = self._df[self._col_frame].unique(maintain_order=True).to_list()
         return self._codes
 
     def write(
@@ -70,7 +66,7 @@ class CIFBlockFrames:
         delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
     ) -> None:
         """Write all save frames in the data block to the writer."""
-        for frame in self():
+        for frame in self:
             frame.write(
                 writer,
                 bool_true=bool_true,
@@ -92,16 +88,15 @@ class CIFBlockFrames:
             )
         return
 
-    def __call__(self) -> Iterator[CIFFrame]:
+    def __iter__(self) -> Iterator[CIFFrame]:
         """Iterate over save frames in the data block."""
         for code in self.codes:
             yield self[code]
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over frame codes in the data block."""
-        for code in self.codes:
-            yield code
-
+    @overload
+    def __getitem__(self, frame_id: str | int) -> CIFFrame: ...
+    @overload
+    def __getitem__(self, frame_id: tuple[str | int, ...] | slice[int]) -> list[CIFFrame]: ...
     def __getitem__(
         self,
         frame_id: str | int | tuple[str | int, ...] | slice[int]
@@ -121,7 +116,7 @@ class CIFBlockFrames:
                 for cat_id in frame_id
             ]
         elif isinstance(frame_id, slice):
-            codes = self.codes[frame_id].to_list()
+            codes = self.codes[frame_id]
         else:
             raise TypeError("frame_id must be str, int, tuple, or slice")
 
@@ -134,7 +129,10 @@ class CIFBlockFrames:
 
     def __len__(self) -> int:
         """Number of save frames in the data block."""
-        return self.codes.shape[0]
+        return len(self.codes)
+
+    def __repr__(self) -> str:
+        return f"CIFBlockFrames(variant={self._variant!r}, frames={len(self)})"
 
     def _get_frames(self) -> dict[str, CIFFrame]:
         """Load all save frames in the data block."""
@@ -191,7 +189,7 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
         return
 
     @property
-    def frame_codes(self) -> pl.Series:
+    def frame_codes(self) -> list[str]:
         """Unique frame codes in the data block."""
         return self.frames.codes
 
@@ -235,7 +233,7 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
         """Write all save frames in the data block to the writer."""
         space = " " * indent
         writer(f"{space}data_{self.code}\n")
-        for category in self.categories():
+        for category in self:
             category.write(
                 writer,
                 bool_true=bool_true,
