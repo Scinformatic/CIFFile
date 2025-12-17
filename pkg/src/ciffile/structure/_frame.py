@@ -71,7 +71,7 @@ class CIFFrame(CIFBlockSkeleton, CIFBlockLike):
         )
         space = " " * indent
         writer(f"{space}save_{frame_code}\n")
-        for category in self.categories():
+        for category in self:
             category.write(
                 writer,
                 bool_true=bool_true,
