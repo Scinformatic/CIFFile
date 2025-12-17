@@ -48,7 +48,7 @@ For mmCIF files, this corresponds to
 the part before the period in the data name.
 For CIF files, this must be `None` for single data items
 (i.e., not part of a loop/table),
-or a unique value (e.g., "1", "2", ...) for each table,
+and a unique value (e.g., "1", "2", ...) for each table,
 shared among all data items in that table.
 """
 
