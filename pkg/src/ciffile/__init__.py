@@ -1,4 +1,4 @@
-"""CIFFile: Read, write, and validate Crystallographic Information Files ([CIF](https://en.wikipedia.org/wiki/Crystallographic_Information_File)).
+"""CIFFile: Read, write, and validate Crystallographic Information Files ([CIF](https://www.iucr.org/resources/cif)).
 
 Notes
 -----
@@ -13,6 +13,7 @@ Official resources:
 - [CIF dictionaries](https://www.iucr.org/resources/cif/dictionaries)
 - [CIF dictionary definition languages (DDl)](https://www.iucr.org/resources/cif/ddl)
 - [CIF file syntax](https://www.iucr.org/resources/cif/spec/version1.1/cifsyntax)
+- [CIF semantics and terms](https://www.iucr.org/resources/cif/spec/version1.1/semantics#definitions)
 - [Online CIF file validator](https://checkcif.iucr.org/)
 
 Other resources:
