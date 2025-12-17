@@ -35,20 +35,20 @@ def create(
         The resulting DataFrame must contain one row
         for each unique data item in the CIF file,
         with columns specifying:
-        - Block code (i.e., data block name) of the data item.
-        - Frame code (i.e., save frame name within the block) of the data item (optional; for CIF dictionary files).
-        - Category of the data item name (tag).
+        - **Block code** (i.e., data block name) of the data item.
+        - **Frame code** (i.e., save frame name within the block) of the data item (optional; for CIF dictionary files).
+        - **Category** of the data item name (tag).
           For mmCIF files, this corresponds to
           the part before the period in the data name.
           For CIF files, this must be `None` for single data items
           (i.e., not part of a loop/table),
           and a unique value (e.g., "1", "2", ...) for each table,
           shared among all data items in that table.
-        - Keyword of the data item name (tag).
+        - **Keyword** of the data item name (tag).
           For mmCIF files, this corresponds to
           the part after the period in the data name.
           For CIF files, this is the data name itself.
-        - Values of the data item as a list.
+        - **Values** of the data item as a list.
           For single data items, the list contains a single string.
           For tabular (looped) data items,
           it contains multiple strings,
