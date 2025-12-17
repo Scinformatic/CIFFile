@@ -220,5 +220,9 @@ class CIFDataCategory(CIFSkeleton):
         )
         return
 
+    def __getitem__(self, key: str) -> pl.Series:
+        """Get a data item (column) by its name."""
+        return self._df[key]
+
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
