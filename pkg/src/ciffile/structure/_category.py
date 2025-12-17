@@ -7,6 +7,7 @@ import polars as pl
 from ciffile.writer import category as write_category
 
 from ._skel import CIFSkeleton
+from ._item import CIFDataItem
 
 
 class CIFDataCategory(CIFSkeleton):
@@ -28,6 +29,18 @@ class CIFDataCategory(CIFSkeleton):
         self._code = code
         self._col_block = col_name_block
         self._col_frame = col_name_frame
+
+        self._keyword_codes: list[str] = [
+            col for col in self._df.columns
+            if col not in (self._col_block, self._col_frame)
+        ]
+
+        self._items: dict[str, CIFDataItem] = {}
+
+        self._description: str | None = None
+        self._groups: dict[str, str] | None = None
+
+        self._generate_items()
         return
 
     @property
@@ -38,7 +51,39 @@ class CIFDataCategory(CIFSkeleton):
     @property
     def keyword_codes(self) -> list[str]:
         """Data item (column) names in this data category."""
-        return self._df.columns
+        return self._keyword_codes
+
+    @CIFSkeleton.df.setter
+    def df(self, new_df: pl.DataFrame) -> None:
+        """Re-set the underlying DataFrame for this data category."""
+        self._df = new_df
+        self._generate_items()
+        return
+
+    @property
+    def description(self) -> str | None:
+        """Description of this data category, if available."""
+        return self._description
+
+    @description.setter
+    def description(self, desc: str | None) -> None:
+        """Set the description of this data category."""
+        self._description = desc
+        return
+
+    @property
+    def groups(self) -> dict[str, str] | None:
+        """Groups this data category belongs to, if available.
+
+        This is a mapping of group IDs to their descriptions.
+        """
+        return self._groups
+
+    @groups.setter
+    def groups(self, groups: dict[str, str] | None) -> None:
+        """Set the groups this data category belongs to."""
+        self._groups = groups
+        return
 
     def write(
         self,
@@ -233,13 +278,13 @@ class CIFDataCategory(CIFSkeleton):
             yield self[keyword_code]
 
     @overload
-    def __getitem__(self, keyword_id: str | int) -> pl.Series: ...
+    def __getitem__(self, keyword_id: str | int) -> CIFDataItem: ...
     @overload
-    def __getitem__(self, keyword_id: tuple[str | int, ...] | slice[int]) -> pl.DataFrame: ...
+    def __getitem__(self, keyword_id: tuple[str | int, ...] | slice[int]) -> list[CIFDataItem]: ...
     def __getitem__(
         self,
         keyword_id: str | int | tuple[str | int, ...] | slice[int]
-    ) -> pl.Series | pl.DataFrame:
+    ) -> CIFDataItem | list[CIFDataItem]:
         """Get a data item (column) by its name or index."""
         if isinstance(keyword_id, str | int):
             keyword_id = (keyword_id,)
@@ -260,12 +305,28 @@ class CIFDataCategory(CIFSkeleton):
             raise TypeError("keyword_id must be str, int, tuple, or slice")
 
         if single:
-            return self._df.select(pl.col(codes[0])).to_series()
-        return self._df.select(pl.col(codes))
+            return self._items[codes[0]]
+        return [self._items[k] for k in codes]
+
+    def __contains__(self, keyword_code: str) -> bool:
+        """Check if a data item with the given name exists in this data category."""
+        return keyword_code in self.keyword_codes
 
     def __len__(self) -> int:
         """Number of data items (columns) in this data category."""
-        return self._df.width
+        n_id_cols = int(self._col_block is not None) + int(self._col_frame is not None)
+        return self._df.width - n_id_cols
 
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
+
+    def _generate_items(self) -> None:
+        """Generate CIFDataItem objects for each data item (column)."""
+        self._items = {
+            keyword: CIFDataItem(
+                code=keyword if self._variant == "cif1" else f"{self._code}.{keyword}",
+                content=self._df[keyword],
+            )
+            for keyword in self.keyword_codes
+        }
+        return
