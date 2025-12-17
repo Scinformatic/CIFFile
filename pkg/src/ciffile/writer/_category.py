@@ -292,9 +292,16 @@ def write(
 
     # Compute widths for tabular styles using written tokens (single-line only).
     col_widths: list[int] = []
-    if table_style in {"tabular-horizontal", "tabular-vertical"}:
+    if table_style == "tabular-horizontal":
         for j in range(n_cols):
-            w = len(names[j])
+            w = len(names[j])  # headers share a row, so include header width
+            for i in range(n_rows):
+                w = max(w, len(rows[i][j]))
+            col_widths.append(w)
+
+    elif table_style == "tabular-vertical":
+        for j in range(n_cols):
+            w = 0  # headers are vertical, so do NOT include header width
             for i in range(n_rows):
                 w = max(w, len(rows[i][j]))
             col_widths.append(w)
