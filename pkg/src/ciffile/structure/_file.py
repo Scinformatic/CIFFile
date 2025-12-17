@@ -36,22 +36,17 @@ class CIFFile(CIFFileSkeleton):
             col_name_values=col_name_values,
         )
 
-        self._block_codes: pl.Series = None
+        self._block_codes: list[str] = []
         self._block_dfs: dict[str, pl.DataFrame] = {}
         self._blocks: dict[str, CIFBlock] = {}
         return
 
     @property
-    def block_codes(self) -> pl.Series:
+    def block_codes(self) -> list[str]:
         """Unique block codes in the CIF file."""
-        if self._block_codes is None:
-            self._block_codes = self._df[self._col_block].unique()
+        if not self._block_codes:
+            self._block_codes = self._df[self._col_block].unique(maintain_order=True).to_list()
         return self._block_codes
-
-    def blocks(self) -> Iterator[CIFBlock]:
-        """Iterate over data blocks in the CIF file."""
-        for block_code in self.block_codes:
-            yield self[block_code]
 
     def write(
         self,
@@ -83,7 +78,7 @@ class CIFFile(CIFFileSkeleton):
         bool_true
             Symbol to use for boolean `True` values.
         """
-        for block in self.blocks():
+        for block in self:
             block.write(
                 writer,
                 bool_true=bool_true,
@@ -162,10 +157,10 @@ class CIFFile(CIFFileSkeleton):
             col_name_values=col_name_values if col_name_values is not None else self._col_values,
         )
 
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over block codes in the CIF file."""
+    def __iter__(self) -> Iterator[CIFBlock]:
+        """Iterate over data blocks in the CIF file."""
         for block_code in self.block_codes:
-            yield block_code
+            yield self[block_code]
 
     def __getitem__(self, block_id: str | int) -> CIFBlock:
         """Get a data block by its block code or index."""
@@ -191,7 +186,7 @@ class CIFFile(CIFFileSkeleton):
 
     def __len__(self) -> int:
         """Number of data blocks in the CIF file."""
-        return self.block_codes.shape[0]
+        return len(self.block_codes)
 
     def __repr__(self) -> str:
         """Representation of the CIF file."""
