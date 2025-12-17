@@ -25,7 +25,7 @@ def read(
     col_name_key: str = "keyword",
     col_name_values: str = "values",
 ) -> CIFFile:
-    """Read a CIF file from a file-like object.
+    """Read a CIF file from content, path, or a file-like object.
 
     Parameters
     ----------
