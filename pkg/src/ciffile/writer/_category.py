@@ -250,8 +250,10 @@ def write(
     has_text_fields = _any_multiline_token()
     if has_text_fields:
         if n_rows == 1 and not always_table:
-            list_style = "vertical"
+            if list_style == "horizontal":
+                list_style = "tabular"  # or "vertical", but tabular is fine and preserves intent
         else:
+            # For loop tables, any multiline token breaks row-based formats.
             table_style = "vertical"
 
     as_table = always_table or n_rows != 1
@@ -689,5 +691,4 @@ def _to_text_field(s: pl.Expr) -> pl.Expr:
     pl.Expr
         UTF-8 expression representing the semicolon-delimited field token.
     """
-    delim = pl.lit("\n;")
-    return pl.concat_str([delim, s, delim])
+    return pl.concat_str([pl.lit(";"), s, pl.lit("\n;")])
