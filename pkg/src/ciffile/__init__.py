@@ -29,8 +29,10 @@ Other Python packages with CIF/mmCIF support:
 - [Biotite](https://github.com/biotite-dev/biotite/tree/master/src/biotite/structure/io/pdbx)
 """
 
+from .creator import create
 from .reader import read
 
 __all__ = [
+    "create",
     "read",
 ]
