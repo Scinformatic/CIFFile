@@ -127,6 +127,10 @@ class CIFBlockFrames:
             return out[0]
         return out
 
+    def __contains__(self, frame_code: str) -> bool:
+        """Check if a save frame with the given frame code exists in the data block."""
+        return frame_code in self.codes
+
     def __len__(self) -> int:
         """Number of save frames in the data block."""
         return len(self.codes)
