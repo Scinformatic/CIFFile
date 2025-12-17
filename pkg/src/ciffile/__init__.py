@@ -32,8 +32,10 @@ Other Python packages with CIF/mmCIF support:
 
 from .creator import create
 from .reader import read
+from .validator import dictionary
 
 __all__ = [
     "create",
+    "dictionary",
     "read",
 ]
