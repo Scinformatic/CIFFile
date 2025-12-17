@@ -82,6 +82,10 @@ class CIFBlockLike:
             return out[0]
         return out
 
+    def __contains__(self, category_code: str) -> bool:
+        """Check if a data category with the given code exists in this data block/save frame."""
+        return category_code in self.category_codes
+
     def __len__(self) -> int:
         """Number of data categories directly in this data block/save frame."""
         return len(self.category_codes)
