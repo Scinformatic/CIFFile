@@ -64,7 +64,7 @@ stateDiagram-v2
 
 import itertools
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Callable
 from typing import NamedTuple, Literal
 
 from fileex.file import content as filelike_to_str
@@ -111,6 +111,7 @@ class CIFParser:
         *,
         variant: Literal["cif1", "mmcif"] = "mmcif",
         encoding: str = "utf-8",
+        case_normalization: Literal["lower", "upper"] | None = "lower",
         raise_level: Literal[0, 1, 2] = 2,
     ) -> None:
         NOOP = lambda: None
@@ -173,10 +174,16 @@ class CIFParser:
 
         self._file: FileLike = file
         self._variant: Literal["cif1", "mmcif"] = variant
+        self._case_normalization: Literal["lower", "upper"] | None = case_normalization
         self._raise_level: Literal[0, 1, 2] = raise_level
         self._tokenizer: Iterator[re.Match] = TOKENIZER.finditer(
             filelike_to_str(file, output="str", encoding=encoding)
         )
+        self._case_normalizer: Callable[[str], str] = {
+            "lower": lambda s: s.lower() if s else s,
+            "upper": lambda s: s.upper() if s else s,
+            None: lambda s: s,
+        }[self._case_normalization]
 
         # Parser state variables
         self._curr_state: State = State.IN_FILE
@@ -555,11 +562,14 @@ class CIFParser:
         return
 
     def _add_data(self, data_value: str | list):
-        self._output_block_codes.append(self._curr_block_code)
-        self._output_frame_codes.append(self._curr_frame_code)
-        self._output_data_categories.append(self._curr_data_category)
-        self._output_data_keywords.append(self._curr_data_keyword)
-        self._output_data_values.append(data_value)
+        for output, output_list in (
+            (self._curr_block_code, self._output_block_codes),
+            (self._curr_frame_code, self._output_frame_codes),
+            (self._curr_data_category, self._output_data_categories),
+            (self._curr_data_keyword, self._output_data_keywords),
+            (data_value, self._output_data_values),
+        ):
+            output_list.append(self._case_normalizer(output))
         return
 
     def _reset_currents(self, level: Literal["block", "frame", "loop"]) -> None:
