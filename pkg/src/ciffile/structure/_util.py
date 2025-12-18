@@ -11,11 +11,11 @@ def dataframe_to_dict(
     df: pl.DataFrame,
     ids: str | list[str],
     flat: bool = False,
-    drop_single_value_col_name: bool = False,
+    single_col: Literal["value", "dict"] = "value",
     single_row: Literal["value", "list"] = "value",
     multi_row: Literal["list", "first", "last"] = "list",
     multi_row_warn: bool = False,
-    ) -> dict:
+) -> dict[Any, Any]:
     """Convert DataFrame to dictionary.
 
     Parameters
@@ -29,22 +29,22 @@ def dataframe_to_dict(
         How to structure the output dictionary's ID dimensions
         when multiple IDs are provided:
         - If `True`, the output dictionary will only have one ID dimension,
-            with keys corresponding to ID tuples.
+          with keys corresponding to ID tuples.
         - If `False`, the output dictionary will be nested,
-            with the first ID values as first-dimension keys,
-            the second ID values as second-dimension keys, and so on.
+          with the first ID values as first-dimension keys,
+          the second ID values as second-dimension keys, and so on.
 
         When only one ID is provided, this parameter has no effect
         and the output will always have a single ID dimension
         with keys corresponding to the ID values.
-    drop_single_value_col_name
+    single_col
         How to structure the output dictionary's data dimension
         (i.e., the value of the inner-most ID dictionary)
         when there is only one data (non-ID) column in the DataFrame:
-        - If `True`, the output dictionary's data dimension will be
-            the column value directly.
-        - If `False`, the output dictionary's data dimension will be dictionaries
-            with the data column name as key and the column value as value.
+        - If "value", the output dictionary's data dimension will be
+          the column value directly.
+        - If "dict", the output dictionary's data dimension will be dictionaries
+          with the data column name as key and the column value as value.
 
         When there are multiple data columns, this parameter has no effect
         and the output will always have dictionaries as the data dimension.
@@ -79,31 +79,30 @@ def dataframe_to_dict(
         """Validate x is usable as a dict key."""
         if isinstance(x, Hashable):
             return x
-        raise TypeError(
+        raise ValueError(
             f"Unhashable ID value in column {col!r}: {x!r} (type={type(x).__name__})"
         )
 
-    def _unwrap_if_single(v: Any, n: int) -> Any:
-        """Unwrap single-item list values when the group size is 1."""
-        if n == 1 and isinstance(v, list):
+    def _select_from_list(v: Any, n: int) -> Any:
+        """Apply single_row/multi_row selection to an aggregated list value."""
+        # Polars group_by().agg(pl.col(...)) yields lists per group.
+        # Still be defensive in case of unexpected scalar.
+        if not isinstance(v, list):
+            if n != 1:
+                # If this ever happens, it's a mismatch between __n__ and aggregation output.
+                raise ValueError("Internal error: expected list-valued aggregation for multi-row group.")
+            return v if single_row == "value" else [v]
+
+        if n == 1:
+            return v[0] if single_row == "value" else v
+
+        # n > 1
+        if multi_row == "list":
+            return v
+        if multi_row == "first":
             return v[0]
-        return v
-
-    def _build_value(row: dict[str, Any]) -> Any:
-        """Build the data-dimension payload for one ID group."""
-        n = int(row["__n__"])
-
-        if not data_cols:
-            return {}
-
-        if len(data_cols) == 1 and drop_single_value_col_name:
-            col = data_cols[0]
-            return _unwrap_if_single(row[col], n)
-
-        out: dict[str, Any] = {}
-        for c in data_cols:
-            out[c] = _unwrap_if_single(row[c], n)
-        return out
+        # multi_row == "last"
+        return v[-1]
 
     id_cols: list[str] = [ids] if isinstance(ids, str) else list(ids)
     if not id_cols:
@@ -111,45 +110,61 @@ def dataframe_to_dict(
 
     missing = [c for c in id_cols if c not in df.columns]
     if missing:
-        raise KeyError(f"ID column(s) not found in DataFrame: {missing}")
+        raise ValueError(f"ID column(s) not found in DataFrame: {missing}")
 
     data_cols = [c for c in df.columns if c not in id_cols]
-    if len(data_cols) == 0:
+    if not data_cols:
         raise ValueError("DataFrame must have at least one data (non-ID) column.")
 
-    # Group and aggregate so duplicates become lists; also track group size.
-    agg_exprs: list[pl.Expr] = [pl.len().alias("__n__")]
-    agg_exprs.extend(pl.col(c).alias(c) for c in data_cols)
+    if single_col not in ("value", "dict"):
+        raise ValueError(f"Invalid single_col={single_col!r}. Expected 'value' or 'dict'.")
+    if single_row not in ("value", "list"):
+        raise ValueError(f"Invalid single_row={single_row!r}. Expected 'value' or 'list'.")
+    if multi_row not in ("list", "first", "last"):
+        raise ValueError(f"Invalid multi_row={multi_row!r}. Expected 'list', 'first', or 'last'.")
 
-    grouped = df.group_by(id_cols, maintain_order=True).agg(agg_exprs)
+    # Aggregate: one row per ID-group; each data column becomes a list; __n__ tracks group size.
+    grouped = df.group_by(id_cols, maintain_order=True).agg(
+        [pl.len().alias("__n__"), *[pl.col(c).alias(c) for c in data_cols]]
+    )
 
-    # Duplicate detection.
-    has_dupes = grouped.select((pl.col("__n__") > 1).any()).item()
-    if has_dupes and unique_id:
-        msg = (
-            "IDs do not uniquely identify rows; returning lists for repeated IDs."
-        )
-        if require_unique_id:
-            raise ValueError(msg)
-        warnings.warn(msg, RuntimeWarning, stacklevel=2)
+    # Warn once if we're dropping rows via first/last for any multi-row group.
+    if multi_row_warn and multi_row in ("first", "last"):
+        n_multi = grouped.filter(pl.col("__n__") > 1).height
+        if n_multi > 0:
+            warnings.warn(
+                f"{n_multi} ID group(s) contain multiple rows; using multi_row={multi_row!r} drops rows.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     result: dict[Any, Any] = {}
 
+    one_data_col = (len(data_cols) == 1)
+    single_data_name = data_cols[0]
+    drop_single_value_col_name = (single_col == "value")
+
     for row in grouped.iter_rows(named=True):
-        # Build the key.
+        n = int(row["__n__"])
+
+        # Build key(s).
         if len(id_cols) == 1:
-            k = _ensure_hashable(row[id_cols[0]], col=id_cols[0])
+            key: Any = _ensure_hashable(row[id_cols[0]], col=id_cols[0])
         else:
             if flat:
-                k = tuple(_ensure_hashable(row[c], col=c) for c in id_cols)
+                key = tuple(_ensure_hashable(row[c], col=c) for c in id_cols)
             else:
-                # Nested structure; keys validated as we descend.
-                k = None  # sentinel; unused in nested mode
+                key = None  # unused in nested mode
 
-        value = _build_value(row)
+        # Build payload.
+        if one_data_col and drop_single_value_col_name:
+            payload = _select_from_list(row[single_data_name], n)
+        else:
+            payload = {c: _select_from_list(row[c], n) for c in data_cols}
 
+        # Assign into flat or nested dict.
         if len(id_cols) == 1 or flat:
-            result[k] = value
+            result[key] = payload
         else:
             cur: dict[Any, Any] = result
             for c in id_cols[:-1]:
@@ -159,13 +174,13 @@ def dataframe_to_dict(
                     nxt = {}
                     cur[kc] = nxt
                 elif not isinstance(nxt, dict):
-                    # Should not happen unless keys collide with a non-dict payload.
-                    raise TypeError(
-                        f"Cannot nest under key {kc!r}: existing value is not a dict."
+                    raise ValueError(
+                        f"Cannot create nested mapping under key {kc!r}: existing value is not a dict."
                     )
                 cur = nxt
+
             last_k = _ensure_hashable(row[id_cols[-1]], col=id_cols[-1])
-            cur[last_k] = value
+            cur[last_k] = payload
 
     return result
 
