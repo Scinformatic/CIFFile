@@ -36,7 +36,8 @@ def parse(
     encoding
         Encoding used to decode the file if it is provided as bytes or Path.
     case_normalization
-        Case normalization to apply to data names and block/frame codes;
+        Case normalization to apply
+        to data names and block/frame codes (which are case-insensitive);
         one of:
         - "lower": convert to lowercase (default)
         - "upper": convert to uppercase
