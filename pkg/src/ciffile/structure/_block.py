@@ -12,35 +12,36 @@ from ._category import CIFDataCategory
 from ._frame import CIFFrame
 
 
-class CIFBlockFrames:
+class CIFBlockFrames(CIFFileSkeleton):
     def __init__(
         self,
         df: pl.DataFrame,
         *,
         variant: Literal["cif1", "mmcif"],
+        validate: bool = False,
         col_name_frame: str | None,
         col_name_cat: str,
         col_name_key: str,
         col_name_values: str,
     ):
-        self._df = df
-        self._has_frames = col_name_frame is not None
-        self._variant = variant
-        self._col_frame = col_name_frame or ""
-        self._col_cat = col_name_cat
-        self._col_key = col_name_key
-        self._col_values = col_name_values
+        super().__init__(
+            content=df,
+            variant=variant,
+            validate=validate,
+            require_block=False,
+            require_frame=False,
+            col_name_block=None,
+            col_name_frame=col_name_frame,
+            col_name_cat=col_name_cat,
+            col_name_key=col_name_key,
+            col_name_values=col_name_values,
+        )
 
-        self._codes: list[str] = []
+        self._has_frames = col_name_frame is not None
+        self._col_frame = col_name_frame or ""
+
         self._frames: dict[str, CIFFrame] = {}
         return
-
-    @property
-    def codes(self) -> list[str]:
-        """Unique frame codes in the data block."""
-        if not self._codes and self._has_frames:
-            self._codes = self._df[self._col_frame].unique(maintain_order=True).to_list()
-        return self._codes
 
     def write(
         self,
@@ -127,14 +128,6 @@ class CIFBlockFrames:
             return out[0]
         return out
 
-    def __contains__(self, frame_code: str) -> bool:
-        """Check if a save frame with the given frame code exists in the data block."""
-        return frame_code in self.codes
-
-    def __len__(self) -> int:
-        """Number of save frames in the data block."""
-        return len(self.codes)
-
     def __repr__(self) -> str:
         return f"CIFBlockFrames(variant={self._variant!r}, frames={len(self)})"
 
@@ -160,6 +153,9 @@ class CIFBlockFrames:
         }
         return self._frames
 
+    def _get_codes(self) -> list[str]:
+        """Get codes of the save frames in the data block."""
+        return self._df[self._col_frame].unique(maintain_order=True).to_list() if self._has_frames else []
 
 class CIFBlock(CIFFileSkeleton, CIFBlockLike):
     """CIF file data block."""
@@ -191,11 +187,6 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
         )
         self._frames: CIFBlockFrames | None = None
         return
-
-    @property
-    def frame_codes(self) -> list[str]:
-        """Unique frame codes in the data block."""
-        return self.frames.codes
 
     @property
     def frames(self) -> CIFBlockFrames:
@@ -328,7 +319,7 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
         )
 
     def __repr__(self) -> str:
-        return f"CIFBlock(code={self.code!r}, type={self.type!r}, variant={self._variant!r}, categories={len(self.category_codes)})"
+        return f"CIFBlock(code={self.code!r}, type={self.type!r}, variant={self._variant!r}, categories={len(self.codes)})"
 
     def _get_categories(self) -> dict[str, CIFDataCategory]:
         """Load all data categories directly in the data block."""
