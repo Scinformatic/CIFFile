@@ -567,9 +567,9 @@ class CIFParser:
             (self._curr_frame_code, self._output_frame_codes),
             (self._curr_data_category, self._output_data_categories),
             (self._curr_data_keyword, self._output_data_keywords),
-            (data_value, self._output_data_values),
         ):
             output_list.append(self._case_normalizer(output))
+        self._output_data_values.append(data_value)
         return
 
     def _reset_currents(self, level: Literal["block", "frame", "loop"]) -> None:
