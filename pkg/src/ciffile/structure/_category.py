@@ -39,8 +39,6 @@ class CIFDataCategory(CIFSkeleton):
 
         self._description: str | None = None
         self._groups: dict[str, str] | None = None
-
-        self._generate_items()
         return
 
     @property
@@ -57,7 +55,6 @@ class CIFDataCategory(CIFSkeleton):
     def df(self, new_df: pl.DataFrame) -> None:
         """Re-set the underlying DataFrame for this data category."""
         self._df = new_df
-        self._generate_items()
         return
 
     @property
@@ -272,7 +269,7 @@ class CIFDataCategory(CIFSkeleton):
         )
         return
 
-    def __iter__(self) -> Iterator[pl.Series]:
+    def __iter__(self) -> Iterator[CIFDataItem]:
         """Iterate over data item columns in the category."""
         for keyword_code in self.keyword_codes:
             yield self[keyword_code]
@@ -304,9 +301,10 @@ class CIFDataCategory(CIFSkeleton):
         else:
             raise TypeError("keyword_id must be str, int, tuple, or slice")
 
+        items = self._get_items()
         if single:
-            return self._items[codes[0]]
-        return [self._items[k] for k in codes]
+            return items[codes[0]]
+        return [items[k] for k in codes]
 
     def __contains__(self, keyword_code: str) -> bool:
         """Check if a data item with the given name exists in this data category."""
@@ -320,8 +318,10 @@ class CIFDataCategory(CIFSkeleton):
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
 
-    def _generate_items(self) -> None:
+    def _get_items(self) -> dict[str, CIFDataItem]:
         """Generate CIFDataItem objects for each data item (column)."""
+        if self._items:
+            return self._items
         self._items = {
             keyword: CIFDataItem(
                 code=keyword if self._variant == "cif1" else f"{self._code}.{keyword}",
@@ -329,4 +329,4 @@ class CIFDataCategory(CIFSkeleton):
             )
             for keyword in self.keyword_codes
         }
-        return
+        return self._items
