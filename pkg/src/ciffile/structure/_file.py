@@ -36,17 +36,9 @@ class CIFFile(CIFFileSkeleton):
             col_name_values=col_name_values,
         )
 
-        self._block_codes: list[str] = []
         self._block_dfs: dict[str, pl.DataFrame] = {}
         self._blocks: dict[str, CIFBlock] = {}
         return
-
-    @property
-    def block_codes(self) -> list[str]:
-        """Unique block codes in the CIF file."""
-        if not self._block_codes:
-            self._block_codes = self._df[self._col_block].unique(maintain_order=True).to_list()
-        return self._block_codes
 
     def write(
         self,
@@ -184,14 +176,6 @@ class CIFFile(CIFFileSkeleton):
         self._blocks[block_code] = block
         return block
 
-    def __contains__(self, block_code: str) -> bool:
-        """Check if a data block with the given block code exists in the CIF file."""
-        return block_code in self.block_codes
-
-    def __len__(self) -> int:
-        """Number of data blocks in the CIF file."""
-        return len(self.block_codes)
-
     def __repr__(self) -> str:
         """Representation of the CIF file."""
         return f"CIFFile(type={self.type!r}, variant={self._variant!r}, blocks={len(self)!r})"
@@ -209,3 +193,7 @@ class CIFFile(CIFFileSkeleton):
             ).items()
         }
         return self._block_dfs
+
+    def _get_codes(self) -> list[str]:
+        """Get codes of the data blocks in the CIF file."""
+        return self._df[self._col_block].unique(maintain_order=True).to_list()
