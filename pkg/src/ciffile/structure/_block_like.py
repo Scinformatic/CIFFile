@@ -19,7 +19,6 @@ class CIFBlockLike:
         super().__init__(**kwargs)
         self._code = code
 
-        self._category_codes: list[str] = []
         self._categories: dict[str, CIFDataCategory] = {}
         return
 
@@ -28,24 +27,9 @@ class CIFBlockLike:
         """Block/frame code."""
         return self._code
 
-    @property
-    def category_codes(self) -> list[str]:
-        """Unique data category names directly in the data block/save frame."""
-        if not self._category_codes:
-            df = self.df
-            if self._col_frame is not None:
-                df = df.filter(pl.col(self._col_frame).is_null())
-            self._category_codes = (
-                df
-                .select(pl.col(self._col_cat).unique(maintain_order=True))
-                .to_series()
-                .to_list()
-            )
-        return self._category_codes
-
     def __iter__(self) -> Iterator[CIFDataCategory]:
         """Iterate over data categories in the data block/save frame."""
-        for category_code in self.category_codes:
+        for category_code in self.codes:
             yield self[category_code]
 
     @overload
@@ -65,13 +49,13 @@ class CIFBlockLike:
 
         if isinstance(category_id, tuple):
             codes = [
-                self.category_codes[cat_id]
+                self.codes[cat_id]
                 if isinstance(cat_id, int)
                 else cat_id
                 for cat_id in category_id
             ]
         elif isinstance(category_id, slice):
-            codes = self.category_codes[category_id]
+            codes = self.codes[category_id]
         else:
             raise TypeError("category_id must be str, int, tuple, or slice")
 
@@ -82,10 +66,14 @@ class CIFBlockLike:
             return out[0]
         return out
 
-    def __contains__(self, category_code: str) -> bool:
-        """Check if a data category with the given code exists in this data block/save frame."""
-        return category_code in self.category_codes
-
-    def __len__(self) -> int:
-        """Number of data categories directly in this data block/save frame."""
-        return len(self.category_codes)
+    def _get_codes(self) -> list[str]:
+        """Unique data category names directly in the data block/save frame."""
+        df = self.df
+        if self._col_frame is not None:
+            df = df.filter(pl.col(self._col_frame).is_null())
+        return (
+            df
+            .select(pl.col(self._col_cat).unique(maintain_order=True))
+            .to_series()
+            .to_list()
+        )
