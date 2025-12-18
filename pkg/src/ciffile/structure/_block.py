@@ -319,7 +319,7 @@ class CIFBlock(CIFFileSkeleton, CIFBlockLike):
         )
 
     def __repr__(self) -> str:
-        return f"CIFBlock(code={self.code!r}, type={self.type!r}, variant={self._variant!r}, categories={len(self.codes)})"
+        return f"CIFBlock(code={self.code!r}, type={self.type!r}, variant={self._variant!r}, categories={len(self)}, frames={len(self.frames)})"
 
     def _get_categories(self) -> dict[str, CIFDataCategory]:
         """Load all data categories directly in the data block."""
