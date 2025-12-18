@@ -22,7 +22,28 @@ class CIFSkeleton(metaclass=ABCMeta):
         super().__init__(**kwargs)
         self._df = content if isinstance(content, pl.DataFrame) else pl.DataFrame(content)
         self._variant: Literal["cif1", "mmcif"] = variant
+
+        self._codes: list[str] | None = None
         return
+
+    @property
+    def codes(self) -> list[str]:
+        """Codes of the containers directly within this container.
+
+        If the current container is
+        - file: returns block codes within the file.
+        - block save frames: returns frame codes within the data block.
+        - data block/save frame: returns data category codes (data name categories) within the data block/save frame.
+        - data category: returns data item codes (data name keywords) within the data category.
+        """
+        if self._codes is None:
+            self._codes = self._get_codes()
+        return self._codes
+
+    @property
+    def df(self) -> pl.DataFrame:
+        """DataFrame representation of the CIF data structure."""
+        return self._df
 
     def to_id_dict(
         self,
@@ -100,6 +121,34 @@ class CIFSkeleton(metaclass=ABCMeta):
             multi_row_warn=multi_row_warn,
         )
 
+    def __contains__(self, code: str) -> bool:
+        """Check if a container with the given code exists directly within this container.
+
+        If the current container is
+        - file: checks for a data block with the given block code.
+        - block save frames: checks for a save frame with the given frame code.
+        - data block/save frame: checks for a data category with the given category code (data name category).
+        - data category: checks for a data item with the given item code (data name keyword).
+        """
+        return code in self.codes
+
+    def __len__(self) -> int:
+        """Number of containers directly in this container.
+
+        if the current container is
+        - file: number of data blocks.
+        - block save frames: number of save frames.
+        - data block/save frame: number of data categories (data name categories).
+        - data category: number of data items (data name keywords).
+        """
+        return len(self.codes)
+
+    def __str__(self) -> str:
+        """String representation of the CIF data structure."""
+        chunks = []
+        self.write(chunks.append)
+        return "".join(chunks)
+
     @abstractmethod
     def write(
         self,
@@ -107,15 +156,16 @@ class CIFSkeleton(metaclass=ABCMeta):
         **kwargs,
     ) -> None:
         """Write the CIF data structure to the writer."""
-        raise NotImplementedError("Subclasses must implement the write method.")
+        ...
 
-    @property
-    def df(self) -> pl.DataFrame:
-        """DataFrame representation of the CIF data structure."""
-        return self._df
+    @abstractmethod
+    def _get_codes(self) -> list[str]:
+        """Get codes of the data containers directly within this container.
 
-    def __str__(self) -> str:
-        """String representation of the CIF data structure."""
-        chunks = []
-        self.write(chunks.append)
-        return "".join(chunks)
+        If the current container is
+        - file: returns data block codes.
+        - block save frames: returns save frame codes.
+        - data block/save frame: returns data category codes (data name categories).
+        - data category: returns data item codes (data name keywords).
+        """
+        ...
