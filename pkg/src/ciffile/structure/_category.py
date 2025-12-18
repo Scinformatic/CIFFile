@@ -30,10 +30,7 @@ class CIFDataCategory(CIFSkeleton):
         self._col_block = col_name_block
         self._col_frame = col_name_frame
 
-        self._keyword_codes: list[str] = [
-            col for col in self._df.columns
-            if col not in (self._col_block, self._col_frame)
-        ]
+        self._keyword_codes: list[str] =
 
         self._items: dict[str, CIFDataItem] = {}
 
@@ -45,11 +42,6 @@ class CIFDataCategory(CIFSkeleton):
     def code(self) -> str:
         """Data category name."""
         return self._code
-
-    @property
-    def keyword_codes(self) -> list[str]:
-        """Data item (column) names in this data category."""
-        return self._keyword_codes
 
     @CIFSkeleton.df.setter
     def df(self, new_df: pl.DataFrame) -> None:
@@ -271,7 +263,7 @@ class CIFDataCategory(CIFSkeleton):
 
     def __iter__(self) -> Iterator[CIFDataItem]:
         """Iterate over data item columns in the category."""
-        for keyword_code in self.keyword_codes:
+        for keyword_code in self.codes:
             yield self[keyword_code]
 
     @overload
@@ -291,13 +283,13 @@ class CIFDataCategory(CIFSkeleton):
 
         if isinstance(keyword_id, tuple):
             codes = [
-                self.keyword_codes[cat_id]
+                self.codes[cat_id]
                 if isinstance(cat_id, int)
                 else cat_id
                 for cat_id in keyword_id
             ]
         elif isinstance(keyword_id, slice):
-            codes = self.keyword_codes[keyword_id]
+            codes = self.codes[keyword_id]
         else:
             raise TypeError("keyword_id must be str, int, tuple, or slice")
 
@@ -305,15 +297,6 @@ class CIFDataCategory(CIFSkeleton):
         if single:
             return items[codes[0]]
         return [items[k] for k in codes]
-
-    def __contains__(self, keyword_code: str) -> bool:
-        """Check if a data item with the given name exists in this data category."""
-        return keyword_code in self.keyword_codes
-
-    def __len__(self) -> int:
-        """Number of data items (columns) in this data category."""
-        n_id_cols = int(self._col_block is not None) + int(self._col_frame is not None)
-        return self._df.width - n_id_cols
 
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
@@ -327,6 +310,13 @@ class CIFDataCategory(CIFSkeleton):
                 code=keyword if self._variant == "cif1" else f"{self._code}.{keyword}",
                 content=self._df[keyword],
             )
-            for keyword in self.keyword_codes
+            for keyword in self.codes
         }
         return self._items
+
+    def _get_codes(self) -> list[str]:
+        """Get codes of the data items (columns) in this data category."""
+        return [
+            col for col in self._df.columns
+            if col not in (self._col_block, self._col_frame)
+        ]
