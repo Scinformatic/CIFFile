@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._ddl2 import DDL2Validator
+from ._ddl2_gen import DDL2Generator
 
 if TYPE_CHECKING:
-    from ciffile.structure import CIFFile
+    from ciffile.structure import CIFFile, CIFBlock
 
 
 __all__ = [
@@ -17,7 +18,7 @@ __all__ = [
 
 
 def dictionary(
-    file: CIFFile,
+    file: CIFFile | CIFBlock | dict,
     *,
     variant: str = "ddl2",
 ) -> DDL2Validator:
@@ -37,5 +38,12 @@ def dictionary(
         CIF file validator instance.
     """
     if variant == "ddl2":
-        return DDL2Validator(file)
-    raise ValueError(f"Unsupported dictionary variant: {variant!r}")
+        generator = DDL2Generator
+        validator = DDL2Validator
+    else:
+        raise ValueError(f"Unsupported dictionary variant: {variant!r}")
+    if isinstance(file, dict):
+        dict_data = file
+    else:
+        dict_data = generator(file).generate()
+    return validator(dict_data)
