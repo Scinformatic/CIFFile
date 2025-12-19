@@ -4,7 +4,7 @@ import warnings
 
 import polars as pl
 
-from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
+from ciffile.structure import CIFFile, CIFBlock
 from ciffile._helper import normalize_whitespace as nws
 from ciffile.structure._util import dataframe_to_dict
 
@@ -39,8 +39,6 @@ class DDL2Generator:
 
         self._catdict: CIFBlock = catdict
         self._keydict: CIFBlock = keydict
-        # self._catdict: dict[str, CIFDataCategory] = self._dict.part("dict_cat").category()
-        # self._keydict: dict[str, CIFDataCategory] = self._dict.part("dict_key").category()
 
         self._out = {}
         return
@@ -179,7 +177,7 @@ class DDL2Generator:
         for cat in self._catdict.frames:
             category = cat["category"]
             cat_id = cat["category"]["id"].value
-            out[cat_id] = {
+            out[cat_id.lower()] = {
                 "description": nws(category["description"].value),
                 "mandatory": category["mandatory_code"].value.lower() == "yes",
                 "group_ids": cat.get("category_group").get("id").values.to_list(),
@@ -209,9 +207,22 @@ class DDL2Generator:
                 category_ids,
                 item["mandatory_code"].values,
             ):
-                item_dict = cat[category].setdefault("item", {})
+                name = name.lower()
+                category = category.lower()
+                try:
+                    item_dict = cat[category].setdefault("item", {})
+                except KeyError as e:
+                    self._warn(
+                        f"Data item definition {name} references undefined category {category}."
+                    )
+                    raise e
                 item_name = name.removeprefix("_")
                 item_id = item_name.split(".", 1)[1]
+                item_type = key.get("item_type")
+                if not item_type:
+                    self._warn(
+                        f"Data item definition {item_name} missing item_type field."
+                    )
                 item_dict[item_id] = {
                     "name": item_name,
                     "description": nws(key.get("item_description").get("description").value or ""),
@@ -220,9 +231,16 @@ class DDL2Generator:
                     "item_enumeration": key.get("item_enumeration").get("value").values.to_list(),
                     "sub_categories": key.get("item_sub_category").get("id").values.to_list(),
                     "type": {
-                        "code": key["item_type"]["code"].value,
+                        "code": item_type.get("code").value,
                         "condition": key.get("item_type_conditions").get("code").value,
                     },
+                    "range": [
+                        [minimum, maximum] if minimum != maximum else minimum
+                        for minimum, maximum in zip(
+                            key["item_range"]["minimum"].values.replace(".", None).cast(pl.Float32).fill_null(float("-inf")).to_list(),
+                            key["item_range"]["maximum"].values.replace(".", None).cast(pl.Float32).fill_null(float("inf")).to_list(),
+                        )
+                    ] if "item_range" in key else [],
                     "unit": key.get("item_units").get("code").value,
                 }
             for name_alias in key.get("item_aliases").get("alias_name").values.to_list():
