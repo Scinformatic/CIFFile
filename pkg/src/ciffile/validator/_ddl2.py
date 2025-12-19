@@ -10,7 +10,7 @@ class DDL2Validator(CIFFileValidator):
     """DDL2 validator for CIF files."""
 
     def __init__(self, dictionary: dict) -> None:
-        self._dict = dictionary
+        super().__init__(dictionary)
         return
 
     @property
@@ -63,21 +63,19 @@ class DDL2Validator(CIFFileValidator):
         cat: CIFDataCategory,
         add_category_info: bool,
     ) -> None:
-        catdef = self._dict.frames[cat.code]
+        catdef = self._dict["category"][cat.code]
 
         # Add category info
         if add_category_info:
             # Set category description
-            cat.description = self._normalize_whitespace(
-                catdef["category"]["description"][0]
-            )
+            cat.description = catdef["description"]
             # Set category group info
             cat.groups = {
-                group_id: self.category_group_description.get(group_id, "")
-                for group_id in catdef["category_group"]["id"]
+                group_id: self._dict["category_group_list"].get(group_id, {})
+                for group_id in catdef["group_ids"]
             }
 
-        canonical_names = self.canonical_name
-        for data_item in cat:
-            name = data_item.code
-            canonical_name = canonical_names.get(name, name)
+        # canonical_names = self.canonical_name
+        # for data_item in cat:
+        #     name = data_item.code
+        #     canonical_name = canonical_names.get(name, name)
