@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .parser import parse
-from .structure import CIFFile, file as _create_cif_file
+from .structure import CIFFile
 from .exception import CIFFileReadError, CIFFileReadErrorType
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ def read(
         "keyword": col_name_key,
         "values": col_name_values,
     }
-    cif = _create_cif_file(
+    cif = CIFFile(
         content={column_name_map[k]: v for k, v in columns.items()},
         variant=variant,
         validate=True,
