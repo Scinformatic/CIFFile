@@ -1,23 +1,28 @@
-from typing import Iterator
+"""CIF data item."""
 
 import polars as pl
 
+from ._base import CIFStructure
 
-class CIFDataItem:
+
+class CIFDataItem(CIFStructure[str | int | float | bool | None]):
+    """CIF file data item."""
 
     def __init__(
         self,
         code: str,
+        name: str,
         content: pl.Series,
     ):
-        self._code = code
+        super().__init__(code=code, container_type="item")
+        self._name = name
         self._values = content
         return
 
     @property
-    def code(self) -> str:
-        """Data item (full) name."""
-        return self._code
+    def name(self) -> str:
+        """Data item full name."""
+        return self._name
 
     @property
     def values(self) -> pl.Series:
@@ -38,23 +43,17 @@ class CIFDataItem:
             return self._values[0]
         return self._values
 
-    def __iter__(self) -> Iterator[str | int | float | bool | None]:
-        """Iterate over values in the data item."""
-        for value in self._values:
-            yield value
-
-    def __getitem__(self, index: int) -> pl.Series:
-        """Get a value by its index."""
-        return self._values[index]
-
-    def __contains__(self, value: str | int | float | bool | None) -> bool:
-        """Check if a value exists in the data item."""
-        return value in self._values
-
-    def __len__(self) -> int:
-        """Number of values in the data item."""
-        return len(self._values)
-
     def __repr__(self) -> str:
         """String representation of the CIF data item."""
         return f"CIFDataItem(code={self._code!r}, values={len(self)})"
+
+    def _get_codes(self) -> list[str]:
+        """Get codes of the data values in this data item."""
+        return [str(i) for i in range(len(self._values))]
+
+    def _get_elements(self) -> dict[str, str | int | float | bool | None]:
+        """Generate data values for this data item."""
+        return {str(i): self._values[i] for i in range(len(self._values))}
+
+    def _get_empty_element(self) -> None:
+        return None
