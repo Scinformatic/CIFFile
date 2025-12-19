@@ -14,25 +14,19 @@ class DDL2Validator(CIFFileValidator):
         return
 
     @property
-    def dict_title(self) -> str:
+    def dict_title(self) -> str | None:
         """Title of the dictionary."""
-        if self._dict_title is None:
-            self._dict_title = str(self._dict["dictionary"]["title"][0])
-        return self._dict_title
+        return self._dict["title"]
 
     @property
-    def dict_description(self) -> str:
+    def dict_description(self) -> str | None:
         """Description of the dictionary."""
-        if self._dict_description is None:
-            self._dict_description = self._normalize_whitespace(self._dict["datablock"]["description"][0])
-        return self._dict_description
+        return self._dict["description"]
 
     @property
-    def dict_version(self) -> str:
+    def dict_version(self) -> str | None:
         """Version of the dictionary."""
-        if self._dict_version is None:
-            self._dict_version = str(self._dict["dictionary"]["version"][0])
-        return self._dict_version
+        return self._dict["version"]
 
     def validate(
         self,
