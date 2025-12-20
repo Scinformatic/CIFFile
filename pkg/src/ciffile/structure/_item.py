@@ -17,6 +17,8 @@ class CIFDataItem(CIFStructure[str | int | float | bool | None]):
         super().__init__(code=code, container_type="item")
         self._name = name
         self._values = content
+        self._description: str | None = None
+        self._unit: str | None = None
         return
 
     @property
@@ -42,6 +44,28 @@ class CIFDataItem(CIFStructure[str | int | float | bool | None]):
         if len(self._values) == 1:
             return self._values[0]
         return self._values
+
+    @property
+    def description(self) -> str | None:
+        """Description of this data category, if available."""
+        return self._description
+
+    @description.setter
+    def description(self, desc: str | None) -> None:
+        """Set the description of this data category."""
+        self._description = desc
+        return
+
+    @property
+    def unit(self) -> str | None:
+        """Unit of this data item, if available."""
+        return self._unit
+
+    @unit.setter
+    def unit(self, unit: str | None) -> None:
+        """Set the unit of this data item."""
+        self._unit = unit
+        return
 
     def __repr__(self) -> str:
         """String representation of the CIF data item."""
