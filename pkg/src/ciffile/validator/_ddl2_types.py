@@ -2,6 +2,9 @@
 
 from typing import Sequence, Literal
 
+from operator import mul
+from functools import reduce
+import math
 import re
 from functools import partial
 
@@ -169,11 +172,353 @@ def _boolean(
     )
 
 
+def _float(
+    s: pl.Expr,
+    *,
+    esd_col_suffix: str = "_unc",
+    float_dtype: pl.DataType = pl.Float64,
+    int_dtype: pl.DataType = pl.Int64,
+) -> tuple[pl.Expr, pl.Expr]:
+    """Parse a string column containing floats and optional parenthesized uncertainty.
+
+    The input strings are expected to be one of:
+    - null
+    - "." (a literal dot)
+    - a floating-point number optionally followed by "(<digits>)"
+      and optionally followed by an exponent part "e/E[+/-]<digits>".
+
+    Behavior:
+    - null stays null in both outputs.
+    - "." becomes NaN in the float output and null in the integer output.
+    - if no "(...)" uncertainty is present, the integer output is null.
+    - the integer output column is named "<input_name><unc_suffix>".
+
+    Parameters
+    -----------
+    s
+        Polars expression that evaluates to a UTF8 (string) column.
+        Typically this is `pl.col("...")`.
+        The expression must have a resolvable output name (i.e. be a named column),
+        because the uncertainty column name is derived from it.
+    esd_col_suffix
+        Suffix appended to the input column name for the uncertainty integer column.
+    float_dtype
+        Float dtype for the parsed float column.
+    int_dtype
+        Integer dtype for the parsed uncertainty column.
+
+    Returns
+    --------
+    tuple[pl.Expr, pl.Expr]
+        (float_expr, uncertainty_int_expr)
+
+    Raises
+    -------
+    ValueError
+        If `s` does not have a resolvable output name.
+
+    Notes
+    ------
+    This uses regex-based extraction and removal of the "(digits)" component:
+    - float output: remove "(digits)" then cast to float
+    - uncertainty output: extract digits inside parentheses then cast to int
+    """
+    name = s.meta.output_name()
+    if not name:
+        raise ValueError(
+            "Input expression must have a resolvable output name (e.g. pl.col('x'))."
+        )
+    values, esd = _float_core(s=s, float_dtype=float_dtype, int_dtype=int_dtype)
+    return values.alias(name), esd.alias(f"{name}{esd_col_suffix}")
+
+
+def _float_core(
+    s: pl.Expr,
+    *,
+    float_dtype: pl.DataType = pl.Float64,
+    int_dtype: pl.DataType = pl.Int64,
+    cast_strict: bool = True,
+) -> tuple[pl.Expr, pl.Expr]:
+    """Parse a string column containing floats and optional parenthesized uncertainty.
+
+    Parse a string expression to (float_value_expr, uncertainty_int_expr) without aliasing.
+
+    This is the element-wise building block:
+    - null -> (null, null)
+    - "."  -> (NaN, null)
+    - otherwise:
+        float: remove "(digits)" then cast
+        int: extract digits in "(digits)" then cast (null if missing)
+    """
+    # Matches "(123)" and captures "123"
+    unc_re = r"\(([0-9]+)\)"
+
+    # Float string = original with the "(digits)" part removed.
+    float_str = s.str.replace_all(unc_re, "")
+    float_val = (
+        pl.when(s.is_null())
+        .then(pl.lit(None, dtype=float_dtype))
+        .when(s == pl.lit("."))
+        .then(pl.lit(math.nan, dtype=float_dtype))
+        .otherwise(float_str.cast(float_dtype, strict=cast_strict))
+    )
+
+    unc_val = (
+        pl.when(s.is_null() | (s == pl.lit(".")))
+        .then(pl.lit(None, dtype=int_dtype))
+        .otherwise(s.str.extract(unc_re, group_index=1).cast(int_dtype, strict=cast_strict))
+    )
+
+    return float_val, unc_val
+
+
+def _float_range(
+    s: pl.Expr,
+    *,
+    esd_col_suffix: str = "_esd",
+    float_dtype: pl.DataType = pl.Float64,
+    int_dtype: pl.DataType = pl.Int64,
+) -> tuple[pl.Expr, pl.Expr]:
+    """Parse a string column into two fixed-size (2) Arrays: floats and uncertainties.
+
+    Input grammar (strings):
+    - null
+    - "." (literal dot)
+    - "<num>" or "<num>-<num>"
+
+    <num> format:
+    - optional leading "-" sign
+    - mantissa: digits with optional trailing '.', OR optional leading digits + '.' + digits
+      (e.g. "1", "1.", "1.23", ".5")
+    - optional "(digits)" uncertainty (e.g. "1.23(45)")
+    - optional exponent "e/E[+/-]digits" (e.g. "1e-3", "1.2(3)E+5")
+
+    Outputs:
+    - Float array (width 2):
+        null -> null
+        "."  -> [NaN, NaN]
+        "<a>" -> [a, a]
+        "<a>-<b>" -> [a, b]
+      Uncertainty "(...)" is ignored for float parsing.
+    - Integer uncertainty array (width 2), named "<col><esd_col_suffix>":
+        null -> null
+        "."  -> [null, null]
+        numbers without "(...)" -> null at that position
+        second missing -> duplicate first (including its uncertainty presence/absence)
+
+    Parameters
+    -----------
+    s
+        Polars expression evaluating to a UTF8 column, typically `pl.col("x")`.
+        Must have a resolvable output name, because the uncertainty column name is derived.
+    esd_col_suffix
+        Suffix appended to the input column name for the uncertainty array column.
+    float_dtype
+        Float dtype for the float array elements.
+    int_dtype
+        Integer dtype for the uncertainty array elements.
+
+    Returns
+    -------
+    tuple[pl.Expr, pl.Expr]
+        (float_array_expr, uncertainty_array_expr)
+
+    Raises
+    ------
+    ValueError
+        If `s` does not have a resolvable output name.
+    """
+    name = s.meta.output_name()
+    if not name:
+        raise ValueError(
+            "Input expression must have a resolvable output name (e.g. pl.col('x'))."
+        )
+
+    # Extract uncertainty digits inside "(...)" (capture group 1).
+    unc_digits_re = r"\(([0-9]+)\)"
+    # Remove "(digits)" for float casting.
+    unc_remove_re = r"\([0-9]+\)"
+
+    # Numeric token (non-capturing only): mantissa + optional uncertainty + optional exponent
+    num = r"(?:[0-9]+\.?|[0-9]*\.[0-9]+)(?:\([0-9]+\))?(?:[eE][+-]?[0-9]+)?"
+
+    # Capture only what we need:
+    # 1: first token (may have leading '-')
+    # 2: optional second dash after separator '-' ("" or "-") => sign for second number
+    # 3: second token (no leading sign)
+    full_re = rf"^(-?{num})(?:-(-?)({num}))?$"
+
+    first_tok = s.str.extract(full_re, group_index=1)
+    second_dash = s.str.extract(full_re, group_index=2)
+    second_tok = s.str.extract(full_re, group_index=3)
+
+    # ---- floats ----
+    first_float = (
+        first_tok.str.replace_all(unc_remove_re, "")
+        .cast(float_dtype, strict=False)
+    )
+    second_float_unsigned = (
+        second_tok.str.replace_all(unc_remove_re, "")
+        .cast(float_dtype, strict=False)
+    )
+    second_float = (
+        pl.when(second_tok.is_null())
+        .then(first_float)
+        .otherwise(
+            pl.when(second_dash == pl.lit("-"))
+            .then(-second_float_unsigned)
+            .otherwise(second_float_unsigned)
+        )
+    )
+
+    float_arr_dtype = pl.Array(float_dtype, 2)
+    float_arr = (
+        pl.when(s.is_null())
+        .then(pl.lit(None, dtype=float_arr_dtype))
+        .when(s == pl.lit("."))
+        .then(pl.lit([math.nan, math.nan]).cast(float_arr_dtype))
+        .otherwise(pl.concat_list([first_float, second_float]).list.to_array(2))
+        .alias(name)
+    )
+
+    # ---- uncertainties (ints) ----
+    first_unc = first_tok.str.extract(unc_digits_re, group_index=1).cast(
+        int_dtype, strict=False
+    )
+    second_unc = second_tok.str.extract(unc_digits_re, group_index=1).cast(
+        int_dtype, strict=False
+    )
+
+    # If second number is missing, duplicate the first uncertainty as well.
+    second_unc_or_dup = pl.when(second_tok.is_null()).then(first_unc).otherwise(second_unc)
+
+    int_arr_dtype = pl.Array(int_dtype, 2)
+    int_arr = (
+        pl.when(s.is_null())
+        .then(pl.lit(None, dtype=int_arr_dtype))
+        .when(s == pl.lit("."))
+        .then(pl.lit([None, None], dtype=int_arr_dtype))
+        .otherwise(pl.concat_list([first_unc, second_unc_or_dup]).list.to_array(2))
+        .alias(f"{name}{esd_col_suffix}")
+    )
+
+    return float_arr, int_arr
+
+
+def _int(
+    expr: pl.Expr,
+    *,
+    dtype: pl.DataType = pl.Int64,
+    strict: bool = True,
+) -> pl.Expr:
+    """Cast a Polars expression to an integer type.
+
+    Preserves existing nulls and converts literal "." values to null
+    before casting.
+    Casts the given Polars expression to an integer dtype.
+    By default, the cast is strict and will raise if values
+    cannot be safely converted.
+
+    Parameters
+    ----------
+    expr
+        Polars expression to cast.
+    dtype
+        Target integer data type (e.g. pl.Int8, pl.Int32, pl.Int64).
+    strict
+        Whether to perform a strict cast.
+        If True, invalid casts raise an error.
+        If False, invalid values become null.
+
+    Returns
+    -------
+    Polars expression with integer dtype.
+
+    Raises
+    ------
+    ValueError
+        If `dtype` is not an integer Polars dtype.
+
+    Notes
+    -----
+    - Floating-point values are truncated toward zero.
+    - Boolean expressions cast to 0/1.
+    - String expressions require `strict=False` unless
+      all values are valid integer literals.
+    """
+    if not isinstance(dtype, pl.DataType) or not dtype.is_integer():
+        raise ValueError(f"dtype must be an integer Polars dtype, got {dtype!r}")
+
+    return (
+        pl.when(expr.is_null())
+        .then(pl.lit(None))
+        .when(expr == ".")
+        .then(pl.lit(None))
+        .otherwise(expr.cast(dtype, strict=strict))
+    )
+
+
+def _int_range(
+    expr: pl.Expr,
+    *,
+    element_dtype: pl.DataType = pl.Int64,
+    cast_strict: bool = True,
+) -> pl.Expr:
+    """Parse an integer range string into a fixed-size list of length 2.
+
+    Expected input format:
+        `[+-]?[0-9]+-[+-]?[0-9]+`
+
+    Transformation rules:
+    - null -> null
+    - "." -> [null, null]
+    - valid range -> [start, end]
+    - anything else -> null
+
+    Parameters
+    ----------
+    expr
+        Polars expression referring to the input string column.
+    element_dtype
+        Integer dtype to cast the two endpoints to.
+    cast_strict
+        Passed to `cast(strict=...)`. If False, failed casts become null.
+
+    Returns
+    -------
+    pl.Expr
+        A Polars expression producing a nullable `list[element_dtype]`
+        where non-null values always have exactly two elements.
+    """
+    # Extract both endpoints only if the *entire* string matches
+    start_s = expr.str.extract(r"^([+-]?\d+)-([+-]?\d+)$", group_index=1)
+    end_s = expr.str.extract(r"^([+-]?\d+)-([+-]?\d+)$", group_index=2)
+
+    start_n = start_s.cast(element_dtype, strict=cast_strict)
+    end_n = end_s.cast(element_dtype, strict=cast_strict)
+
+    out_dtype = pl.Array(element_dtype, 2)
+
+    range_pair = (
+        pl.when(start_n.is_null() | end_n.is_null())
+        .then(None)
+        .otherwise(pl.concat_list([start_n, end_n]).cast(out_dtype, strict=cast_strict))
+    )
+
+    return (
+        pl.when(expr.is_null())
+        .then(None)
+        .when(expr == ".")
+        .then(pl.lit([None, None], dtype=out_dtype))
+        .otherwise(range_pair)
+    )
+
+
 def _delimited_list(
     expr: pl.Expr,
     *,
     delimiter: str = ",",
-    strip_elements: bool = False,
+    strip_elements: bool = True,
     element_dtype: pl.DataType | None = None,
     cast_strict: bool = True,
 ) -> pl.Expr:
@@ -230,6 +575,56 @@ def _delimited_list(
     if element_dtype is not None:
         split_expr = split_expr.list.eval(pl.element().cast(element_dtype, strict=cast_strict))
 
+    return (
+        pl.when(expr.is_null())
+        .then(None)
+        .when(expr == ".")
+        .then(pl.lit([], dtype=pl.List(inner_dtype)))
+        .otherwise(split_expr)
+    )
+
+
+def _spaced_list(
+    expr: pl.Expr,
+    *,
+    element_dtype: pl.DataType | None = None,
+    cast_strict: bool = True,
+) -> pl.Expr:
+    """Parse a whitespace-separated string column into a list column.
+
+    The input column is assumed to contain only:
+    - null
+    - the literal string "."
+    - a non-empty list of tokens (whitespace-separated)
+
+    Transformation rules:
+    - null stays null
+    - "." becomes an empty list
+    - other strings are split into list elements,
+      i.e., tokenizes by extracting runs of non-whitespace characters (`\\S+`),
+      which is equivalent to splitting on one or more whitespace characters.
+    - optionally casts each element to another dtype
+
+    Parameters
+    ----------
+    expr
+        Polars expression referring to the input string column.
+    element_dtype
+        Optional dtype to cast list elements to.
+    cast_strict
+        Passed to `cast(strict=...)` when `element_dtype` is provided.
+
+    Returns
+    -------
+    pl.Expr
+        A Polars expression producing a nullable list column.
+    """
+    split_expr = expr.str.extract_all(r"\S+")
+    inner_dtype: pl.DataType = pl.Utf8 if element_dtype is None else element_dtype
+    if element_dtype is not None:
+        split_expr = split_expr.list.eval(
+            pl.element().cast(element_dtype, strict=cast_strict)
+        )
     return (
         pl.when(expr.is_null())
         .then(None)
@@ -414,8 +809,14 @@ _CODE_TO_CAST_FUNC = {
   "boolean": _boolean,
   "date_dep": _partial_datetime,
   "entity_id_list": _delimited_list,
+  "float": _float,
+  "float-range": _float_range,
   "id_list": _delimited_list,
+  "id_list_spc": _spaced_list,
+  "int": _int,
+  "int-range": _int_range,
   "int_list": partial(_delimited_list, element_dtype=pl.Int64),
+  "symmetry_operation": _delimited_list,
   "ucode-alphanum-csv": _delimited_list,
   "yyyy-mm-dd": _partial_datetime,
   "yyyy-mm-dd:hh:mm": _partial_datetime,
