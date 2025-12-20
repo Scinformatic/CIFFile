@@ -33,7 +33,8 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         self._col_frame = col_name_frame
 
         self._description: str | None = None
-        self._groups: dict[str, str] | None = None
+        self._groups: dict[str, dict[str, str]] | None = None
+        self._keys: list[str] | None = None
         return
 
     @CIFStructureWithItem.df.setter
@@ -54,17 +55,30 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         return
 
     @property
-    def groups(self) -> dict[str, str] | None:
+    def groups(self) -> dict[str, dict[str, str]] | None:
         """Groups this data category belongs to, if available.
 
-        This is a mapping of group IDs to their descriptions.
+        This is a mapping of group IDs to dictionaries with keys:
+        - "description": Description of the category group.
+        - "parent_id": Parent category group ID, if available.
         """
         return self._groups
 
     @groups.setter
-    def groups(self, groups: dict[str, str] | None) -> None:
+    def groups(self, groups: dict[str, dict[str, str]] | None) -> None:
         """Set the groups this data category belongs to."""
         self._groups = groups
+        return
+
+    @property
+    def keys(self) -> list[str] | None:
+        """Data item codes (column names) corresponding to category keys, if available."""
+        return self._keys
+
+    @keys.setter
+    def keys(self, keys: list[str] | None) -> None:
+        """Set the data item codes (column names) corresponding to category keys."""
+        self._keys = keys
         return
 
     def __repr__(self) -> str:
