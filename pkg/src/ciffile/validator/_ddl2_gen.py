@@ -228,7 +228,7 @@ class DDL2Generator:
                     "description": nws(key.get("item_description").get("description").value or ""),
                     "mandatory": mandatory.lower() == "yes",
                     "default": key.get("item_default").get("value").value,
-                    "item_enumeration": key.get("item_enumeration").get("value").values.to_list(),
+                    "enum": key.get("item_enumeration").get("value").values.to_list(),
                     "sub_categories": key.get("item_sub_category").get("id").values.to_list(),
                     "type": {
                         "code": item_type.get("code").value,
