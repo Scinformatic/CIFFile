@@ -41,16 +41,17 @@ class DDL2ItemDef(BaseModel):
     range: list[tuple[float | None, float | None]] | None = None
     sub_categories: list[str] | None = None
     units: str | None = None
+    linked: set[str] | None = None
 
 
 class DDL2Dictionary(BaseModel):
     """Representation of a DDL2 CIF dictionary."""
 
-    title: str | None
-    description: str | None
-    version: str | None
-    category_group: dict[str, DDL2CategoryGroup]
-    item_type: dict[str, DDL2ItemType]
-    sub_category: dict[str, str]
     category: dict[str, DDL2CategoryDef]
     item: dict[str, DDL2ItemDef]
+    category_group: dict[str, DDL2CategoryGroup]
+    sub_category: dict[str, str]
+    item_type: dict[str, DDL2ItemType]
+    title: str | None = None
+    description: str | None = None
+    version: str | None = None
