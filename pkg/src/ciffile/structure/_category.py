@@ -35,6 +35,7 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         self._description: str | None = None
         self._groups: dict[str, dict[str, str]] | None = None
         self._keys: list[str] | None = None
+        self._item_names: list[str] | None = None
         return
 
     @CIFStructureWithItem.df.setter
@@ -80,6 +81,13 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         """Set the data item codes (column names) corresponding to category keys."""
         self._keys = keys
         return
+
+    @property
+    def item_names(self) -> list[str]:
+        """Full names of the data items in this data category."""
+        if self._item_names is None:
+            self._item_names = [item.name for item in self]
+        return self._item_names
 
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
