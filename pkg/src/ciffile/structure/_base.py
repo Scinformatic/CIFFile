@@ -356,6 +356,7 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
             single_row=single_row,
             multi_row=multi_row,
             multi_row_warn=multi_row_warn,
+            df_name=f"{self.code} ({self.container_type})",
         )
 
     def write(
