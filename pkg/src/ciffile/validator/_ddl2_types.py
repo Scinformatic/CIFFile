@@ -175,7 +175,7 @@ def _boolean(
 def _float(
     s: pl.Expr,
     *,
-    esd_col_suffix: str = "_unc",
+    esd_col_suffix: str = "_esd",
     float_dtype: pl.DataType = pl.Float64,
     int_dtype: pl.DataType = pl.Int64,
 ) -> tuple[pl.Expr, pl.Expr]:
