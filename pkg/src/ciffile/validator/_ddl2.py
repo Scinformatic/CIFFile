@@ -262,5 +262,286 @@ def validate_mmcif_category_table(
          it is compared with the caster-produced column,
          and any discrepancies are collected.
     """
-    return
+    def _normalize_case_expr(expr: pl.Expr, mode: Literal["lower", "upper"]) -> pl.Expr:
+        if mode == "lower":
+            return expr.str.to_lowercase()
+        return expr.str.to_uppercase()
+
+    def _normalize_case_values(values: list[str], mode: Literal["lower", "upper"]) -> list[str]:
+        if mode == "lower":
+            return [v.lower() for v in values]
+        return [v.upper() for v in values]
+
+    def _is_nullish_scalar(expr: pl.Expr) -> pl.Expr:
+        # "nullish" here means: null OR NaN OR empty string
+        # (covers typical aux columns and scalar data after casting).
+        return (
+            expr.is_null()
+            | pl.when(expr.is_nan().is_not_null()).then(expr.is_nan()).otherwise(False)
+            | pl.when(expr.dtype == pl.Utf8).then(expr == "").otherwise(False)  # best-effort
+        )
+
+    def _safe_is_nan(expr: pl.Expr) -> pl.Expr:
+        # Polars raises for is_nan on non-floats; guard it.
+        return pl.when(expr.is_nan().is_not_null()).then(expr.is_nan()).otherwise(False)
+
+    def _collect_row_indices(df: pl.DataFrame, mask: pl.Expr) -> list[int]:
+        # mask is a boolean per-row expression
+        return df.select(pl.arg_where(mask)).to_series(0).to_list()
+
+    def _fullmatch_regex_expr(expr: pl.Expr, regex: str) -> pl.Expr:
+        # Force a full match even if regex is not anchored.
+        pat = f"^(?:{regex})$"
+        return expr.cast(pl.Utf8).str.contains(pat)
+
+    def _innermost_violation_any(
+        col_expr: pl.Expr,
+        predicate_on_element: Callable[[pl.Expr], pl.Expr],
+        max_depth: int = 8,
+    ) -> pl.Expr:
+        """
+        Return a per-row bool: True if any innermost element violates predicate.
+
+        Handles scalar and nested List columns (List, List[List], ...).
+        For non-List complex types, it falls back to scalar treatment.
+        """
+        # Try nested list evaluation a few times; if at runtime it's not a list, Polars will error.
+        # To avoid hard failures, we only use list.eval while dtype stays List in eager context
+        # by switching to a runtime-friendly expression: we attempt list.eval and rely on schema
+        # at the moment we build expressions (post-cast).
+        e = col_expr
+        depth = 0
+        while depth < max_depth:
+            # We can inspect dtype only if it's a literal column expr? In practice, we call this
+            # with pl.col(name) on an eager DataFrame with known schema (post-cast), so this works.
+            # If not, we bail out early.
+            try:
+                # This attribute access is supported on Expr in modern Polars; if absent, except.
+                dtype = e.dtype  # type: ignore[attr-defined]
+            except Exception:
+                dtype = None
+
+            if dtype is not None and isinstance(dtype, pl.List):
+                # Evaluate one level down.
+                e = e.list.eval(pl.element())
+                depth += 1
+                continue
+            break
+
+        # If still list-typed, apply predicate at element level and reduce with list.any().
+        try:
+            dtype = e.dtype  # type: ignore[attr-defined]
+        except Exception:
+            dtype = None
+
+        if dtype is not None and isinstance(dtype, pl.List):
+            # Apply predicate to (one-level) list elements.
+            viol_list = e.list.eval(predicate_on_element(pl.element()))
+            return viol_list.list.any()
+        # Scalar
+        return predicate_on_element(e)
+
+    def _enum_violation_mask(col_expr: pl.Expr, enum_values: list[str]) -> pl.Expr:
+        def pred(el: pl.Expr) -> pl.Expr:
+            # Ignore null/NaN/empty
+            return (
+                (~el.is_null())
+                & (~_safe_is_nan(el))
+                & pl.when(el.dtype == pl.Utf8).then(el != "").otherwise(True)  # best-effort
+                & (~el.is_in(enum_values))
+            )
+
+        return _innermost_violation_any(col_expr, pred)
+
+    def _range_allowed_predicate(el: pl.Expr, ranges: list[tuple[float | None, float | None]]) -> pl.Expr:
+        allowed_any = None
+        for lo, hi in ranges:
+            if lo is None and hi is None:
+                this_allowed = pl.lit(True)
+            elif lo is not None and hi is not None and lo == hi:
+                this_allowed = el == pl.lit(lo)
+            else:
+                parts: list[pl.Expr] = []
+                if lo is not None:
+                    parts.append(el > pl.lit(lo))
+                if hi is not None:
+                    parts.append(el < pl.lit(hi))
+                this_allowed = parts[0]
+                for p in parts[1:]:
+                    this_allowed = this_allowed & p
+            allowed_any = this_allowed if allowed_any is None else (allowed_any | this_allowed)
+        return allowed_any if allowed_any is not None else pl.lit(True)
+
+    def _range_violation_mask(
+        col_expr: pl.Expr,
+        ranges: list[tuple[float | None, float | None]],
+    ) -> pl.Expr:
+        def pred(el: pl.Expr) -> pl.Expr:
+            # Ignore null/NaN
+            allowed = _range_allowed_predicate(el, ranges)
+            return (~el.is_null()) & (~_safe_is_nan(el)) & (~allowed)
+
+        return _innermost_violation_any(col_expr, pred)
+
+    if not isinstance(table, pl.DataFrame):
+        raise TypeError("table must be a polars.DataFrame")
+
+    df = table.clone()
+    errors: list[dict[str, Any]] = []
+
+    # Only validate items that are present in item_defs and exist in the table.
+    # (No implicit creation of missing columns here.)
+    for item, idef in item_defs.items():
+        if item not in df.columns:
+            continue
+
+        default: str | None = idef.get("default")
+        enum: list[str] | None = idef.get("enum")
+        ranges: list[tuple[float | None, float | None]] | None = idef.get("range")
+        caster = idef.get("caster")
+        type_primitive: str = idef.get("type_primitive")
+        type_regex: str = idef.get("type_regex")
+
+        if not callable(caster):
+            raise TypeError(f'item_defs["{item}"]["caster"] must be callable')
+
+        # --- Step 1: handle "?" missing values (and collect missing_value errors if no default).
+        missing_mask = pl.col(item).cast(pl.Utf8) == pl.lit("?")
+        if default is not None:
+            df = df.with_columns(
+                pl.when(missing_mask).then(pl.lit(default)).otherwise(pl.col(item)).alias(item)
+            )
+        else:
+            missing_rows = _collect_row_indices(df, missing_mask)
+            if missing_rows:
+                errors.append(
+                    {"item": item, "row_indices": missing_rows, "error_type": "missing_value"}
+                )
+            df = df.with_columns(
+                pl.when(missing_mask).then(pl.lit(None)).otherwise(pl.col(item)).alias(item)
+            )
+
+        # --- Step 2: construct regex check (exclude null and "." only).
+        # Treat the table as strings here; mmCIF raw tables commonly are strings.
+        non_null_non_dot = pl.col(item).is_not_null() & (pl.col(item).cast(pl.Utf8) != pl.lit("."))
+        construct_ok = _fullmatch_regex_expr(pl.col(item).cast(pl.Utf8), type_regex)
+        construct_mismatch_mask = non_null_non_dot & (~construct_ok)
+        construct_bad_rows = _collect_row_indices(df, construct_mismatch_mask)
+        if construct_bad_rows:
+            errors.append(
+                {
+                    "item": item,
+                    "row_indices": construct_bad_rows,
+                    "error_type": "construct_mismatch",
+                }
+            )
+
+        # --- Step 3: normalize case for uchar (applied on non-null and not ".")
+        if type_primitive == "uchar" and case_normalization in ("lower", "upper"):
+            norm = case_normalization
+            df = df.with_columns(
+                pl.when(pl.col(item).is_null() | (pl.col(item).cast(pl.Utf8) == pl.lit(".")))
+                .then(pl.col(item))
+                .otherwise(_normalize_case_expr(pl.col(item).cast(pl.Utf8), norm))
+                .alias(item)
+            )
+
+        # --- Step 4: cast via caster; add/merge auxiliary columns
+        exprs = caster(pl.col(item))
+        if not isinstance(exprs, list) or not exprs:
+            raise TypeError(f'caster for "{item}" must return a non-empty list of Polars expressions')
+
+        main_expr = exprs[0]
+        # Ensure the main expression aliases back to the item name
+        if getattr(main_expr, "meta", None) is not None:
+            try:
+                out_name = main_expr.meta.output_name()
+            except Exception:
+                out_name = None
+        else:
+            out_name = None
+        if out_name != item:
+            main_expr = main_expr.alias(item)
+
+        produced_aux_exprs: list[pl.Expr] = []
+        produced_aux_names: list[str] = []
+        for aux_expr in exprs[1:]:
+            if getattr(aux_expr, "meta", None) is None:
+                raise ValueError(f'auxiliary expression for "{item}" lacks metadata/alias')
+            aux_name = aux_expr.meta.output_name()
+            if not aux_name:
+                raise ValueError(f'auxiliary expression for "{item}" must have an alias')
+            produced_aux_exprs.append(aux_expr)
+            produced_aux_names.append(aux_name)
+
+        # Compute casted + produced aux into a temporary DF to compare/merge reliably.
+        tmp_cols = [main_expr] + [e.alias(n) for e, n in zip(produced_aux_exprs, produced_aux_names)]
+        tmp = df.select(pl.all(), *tmp_cols)
+
+        # Replace df's main column with casted version.
+        df = df.with_columns(tmp[item])
+
+        # Merge auxiliary columns according to spec.
+        for aux_name in produced_aux_names:
+            produced = tmp[aux_name]
+            if aux_name not in df.columns:
+                df = df.with_columns(pl.lit(produced).alias(aux_name))
+                continue
+
+            # Compare non-nullish input vs produced; fill nullish with produced.
+            input_col = pl.col(aux_name)
+            produced_col = pl.lit(produced).alias(aux_name)
+
+            # Nullish detection for aux columns: null OR NaN (and treat empty string as nullish too).
+            input_nullish = input_col.is_null() | _safe_is_nan(input_col) | (
+                input_col.cast(pl.Utf8, strict=False) == pl.lit("")
+            )
+            produced_nullish = produced_col.is_null() | _safe_is_nan(produced_col) | (
+                produced_col.cast(pl.Utf8, strict=False) == pl.lit("")
+            )
+
+            # Equality with NaN handling (NaN == NaN should be treated as equal here).
+            both_nan = _safe_is_nan(input_col) & _safe_is_nan(produced_col)
+            equal_or_both_nan = (input_col == produced_col) | both_nan
+
+            mismatch_mask = (
+                (~input_nullish)
+                & (~produced_nullish)
+                & (~equal_or_both_nan)
+            )
+
+            bad_rows = _collect_row_indices(df, mismatch_mask)
+            if bad_rows:
+                errors.append(
+                    {"item": aux_name, "row_indices": bad_rows, "error_type": "auxiliary_mismatch"}
+                )
+
+            df = df.with_columns(
+                pl.when(input_nullish).then(produced_col).otherwise(input_col).alias(aux_name)
+            )
+
+        # --- Step 5: enum check + categorical cast (only if no enum violations).
+        if enum is not None:
+            enum_values = list(enum)
+            if type_primitive == "uchar" and case_normalization in ("lower", "upper"):
+                enum_values = _normalize_case_values(enum_values, case_normalization)
+
+            enum_bad_rows = _collect_row_indices(df, _enum_violation_mask(pl.col(item), enum_values))
+            if enum_bad_rows:
+                errors.append(
+                    {"item": item, "row_indices": enum_bad_rows, "error_type": "enum_violation"}
+                )
+            else:
+                # Best-effort categorical; Polars does not reliably let us pin category order here.
+                df = df.with_columns(pl.col(item).cast(pl.Categorical).alias(item))
+
+        # --- Step 6: range check (numeric-ish columns; applied to innermost values).
+        if ranges is not None:
+            range_bad_rows = _collect_row_indices(df, _range_violation_mask(pl.col(item), ranges))
+            if range_bad_rows:
+                errors.append(
+                    {"item": item, "row_indices": range_bad_rows, "error_type": "range_violation"}
+                )
+
+    return df, errors
 
