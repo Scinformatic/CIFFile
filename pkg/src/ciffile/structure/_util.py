@@ -15,6 +15,7 @@ def dataframe_to_dict(
     single_row: Literal["value", "list"] = "value",
     multi_row: Literal["list", "first", "last"] = "list",
     multi_row_warn: bool = False,
+    df_name: str | None = None,
 ) -> dict[Any, Any]:
     """Convert DataFrame to dictionary.
 
@@ -130,10 +131,15 @@ def dataframe_to_dict(
 
     # Warn once if we're dropping rows via first/last for any multi-row group.
     if multi_row_warn and multi_row in ("first", "last"):
-        n_multi = grouped.filter(pl.col("__n__") > 1).height
+        multi = grouped.filter(pl.col("__n__") > 1)
+        n_multi = multi.height
         if n_multi > 0:
             warnings.warn(
-                f"{n_multi} ID group(s) contain multiple rows; using multi_row={multi_row!r} drops rows.",
+                (
+                    f"{n_multi} ID group(s) contain multiple rows{f' in DataFrame {df_name!r}' if df_name else ''}; "
+                    f"using multi_row={multi_row!r} drops rows."
+                    f"IDs of affected groups include: {', '.join(f"'{multi.select(pl.col(c)).row(0)[0]}'" for c in id_cols)}"
+                ),
                 RuntimeWarning,
                 stacklevel=2,
             )
