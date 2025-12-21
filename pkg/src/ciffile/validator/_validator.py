@@ -13,3 +13,6 @@ class CIFFileValidator:
     def dict(self) -> dict[str, Any]:
         """Dictionary metadata."""
         return self._dict
+
+    def __getitem__(self, key: str) -> Any:
+        return self._dict[key]
