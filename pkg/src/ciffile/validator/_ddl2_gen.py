@@ -230,10 +230,11 @@ class DDL2Generator:
             for key, gen_func in self._item_generator.items():
                 if key in item_frame:
                     item_dict[key.removeprefix("item_")] = gen_func(item_frame[key], frame_code=item_frame.code)
-            out_item[item_self["name"]] = item_dict
-        return self._gen_item2(out_item)
 
-    def _gen_item2(self, items: dict[str, dict]) -> dict[str, dict]:
+            out_item[item_self["name"]] = item_dict
+        return self._fill_items(out_item)
+
+    def _fill_items(self, items: dict[str, dict]) -> dict[str, dict]:
         """Generate data for data items in a category."""
         def update(add_from: dict, add_to: dict, add_to_name: str, add_extra: dict | None = None) -> None:
             self._update_item_definition(
