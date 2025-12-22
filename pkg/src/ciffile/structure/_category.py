@@ -42,6 +42,7 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
     def df(self, new_df: pl.DataFrame) -> None:
         """Re-set the underlying DataFrame for this data category."""
         self._df = new_df
+        self.refresh()
         return
 
     @property
