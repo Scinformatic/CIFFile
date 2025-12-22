@@ -1,15 +1,20 @@
 """DDL2 validator."""
 
-from typing import Any, Sequence, Literal, Callable
+from __future__ import annotations
+
+from typing import Any, Sequence, Literal, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
 import polars as pl
 
-from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
-from ._validator import CIFFileValidator
-from ._ddl2_model import DDL2Dictionary
-from ._ddl2_types import Caster, CastPlan
+
+from .._base import CIFFileValidator
+from ._input_schema import DDL2Dictionary
+from ._caster import Caster, CastPlan
 from ._re import normalize_for_rust_regex
+
+if TYPE_CHECKING:
+    from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
 
 
 class DDL2Validator(CIFFileValidator):
@@ -123,10 +128,10 @@ class DDL2Validator(CIFFileValidator):
                 add_item_info=add_item_info,
             )
 
-        if isinstance(file, CIFDataCategory):
+        if file.container_type == "category":
             return pl.DataFrame(validate_category(file))
 
-        blocks = [file] if isinstance(file, CIFBlock) else file
+        blocks = [file] if file.container_type == "block" else file
         errs = []
         for block in blocks:
             for mandatory_cat in self._dict["mandatory_categories"]:

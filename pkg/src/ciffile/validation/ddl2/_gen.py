@@ -1,25 +1,32 @@
 """DDL2 validator."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import warnings
 
 import polars as pl
 
-from ciffile.structure import CIFFile, CIFBlock, CIFFrame, CIFDataCategory
+
 from ciffile._helper import normalize_whitespace as nws
 from ciffile.structure._util import dataframe_to_dict
+
+if TYPE_CHECKING:
+    from ciffile.structure import CIFFile, CIFBlock, CIFFrame, CIFDataCategory
 
 
 class DDL2Generator:
     """DDL2 validator generator."""
 
     def __init__(self, dictionary: CIFFile | CIFBlock) -> None:
-        if isinstance(dictionary, CIFFile):
+        if dictionary.container_type == "file":
             if len(dictionary) != 1:
                 raise ValueError(
                     "DDL2Generator requires a CIFFile with exactly one block as dictionary."
                 )
             self._dict = dictionary[0]
-        elif isinstance(dictionary, CIFBlock):
+        elif dictionary.container_type == "block":
             self._dict = dictionary
         else:
             raise TypeError(
