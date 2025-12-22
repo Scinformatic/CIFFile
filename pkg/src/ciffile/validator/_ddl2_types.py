@@ -86,6 +86,7 @@ class Caster:
         self._datetime_time_zone = datetime_time_zone
 
         self._type_to_caster = {
+            "any": self.any,
             "boolean": self.boolean,
             "date_dep": self.date_dep,
             "entity_id_list": self.entity_id_list,
@@ -102,7 +103,6 @@ class Caster:
             "yyyy-mm-dd:hh:mm": self.yyyy_mm_dd_hh_mm,
             "yyyy-mm-dd:hh:mm-flex": self.yyyy_mm_dd_hh_mm_flex,
         }
-        self._default_caster = lambda col: [CastPlan(expr=col, dtype="str")]
         return
 
     def __call__(self, col: str | pl.Expr, type: str) -> list[CastPlan]:
@@ -122,7 +122,11 @@ class Caster:
             List of casting plans (one or two, depending on type).
         """
         col = pl.col(col) if isinstance(col, str) else col
-        return self._type_to_caster.get(type, self._default_caster)(col)
+        return self._type_to_caster.get(type, self.any)(col)
+
+    def any(self, expr: pl.Expr) -> list[CastPlan]:
+        transform = expr.replace({".": "", "?": None})
+        return [CastPlan(expr=transform, dtype="str")]
 
     def boolean(self, expr: pl.Expr) -> list[CastPlan]:
         """Convert a string column to boolean using explicit truthy/falsey vocabularies.
