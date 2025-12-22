@@ -184,9 +184,7 @@ class Caster:
             normalized = normalized.str.to_lowercase()
 
         expr = (
-            pl.when(expr.is_null())
-            .then(None)
-            .when(normalized.is_in(list(true_set)))
+            pl.when(normalized.is_in(list(true_set)))
             .then(pl.lit(True, dtype=pl.Boolean))
             .when(normalized.is_in(list(false_set)))
             .then(pl.lit(False, dtype=pl.Boolean))
@@ -417,14 +415,12 @@ class Caster:
         - String expressions require `strict=False` unless
         all values are valid integer literals.
         """
-        expr = (
-            pl.when(expr.is_null())
-            .then(pl.lit(None))
-            .when(expr == ".")
-            .then(pl.lit(None))
-            .otherwise(expr.cast(self._dtype_int, strict=self._cast_strict))
+        transform = (
+            expr
+            .replace({".": None, "?": None})
+            .cast(self._dtype_int, strict=self._cast_strict)
         )
-        return [CastPlan(expr=expr, dtype="int")]
+        return [CastPlan(expr=transform, dtype="int")]
 
     def int_list(self, expr: pl.Expr) -> list[CastPlan]:
         expr = self._list_delimited(expr, element_dtype=self._dtype_int)
@@ -681,20 +677,16 @@ class Caster:
         # Matches "(123)" and captures "123"
         unc_re = r"\(([0-9]+)\)"
 
-        # Float string = original with the "(digits)" part removed.
-        float_str = s.str.replace_all(unc_re, "")
         float_val = (
-            pl.when(s.is_null())
-            .then(pl.lit(None, dtype=self._dtype_float))
-            .when(s == pl.lit("."))
-            .then(pl.lit(math.nan, dtype=self._dtype_float))
-            .otherwise(float_str.cast(self._dtype_float, strict=self._cast_strict))
+            s.str.replace_all(unc_re, "")  # Float string = original with the "(digits)" part removed.
+            .replace({".": "nan", "?": None})
+            .cast(self._dtype_float, strict=self._cast_strict)
         )
 
+        # extract returns digits or null; casting that is globally valid
         unc_val = (
-            pl.when(s.is_null() | (s == pl.lit(".")))
-            .then(pl.lit(None, dtype=self._dtype_int))
-            .otherwise(s.str.extract(unc_re, group_index=1).cast(self._dtype_int, strict=self._cast_strict))
+            s.str.extract(unc_re, group_index=1)
+            .cast(self._dtype_int, strict=self._cast_strict)
         )
 
         return float_val, unc_val
