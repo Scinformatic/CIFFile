@@ -5,6 +5,7 @@ from typing import Literal, Self
 import polars as pl
 
 from ciffile.typing import DataFrameLike
+from ciffile.validation import dictionary as to_validator_dict
 from ._base import CIFStructureWithFrame
 from ._util import extract_categories
 from ._category import CIFDataCategory
@@ -57,6 +58,13 @@ class CIFBlock(CIFStructureWithFrame[CIFDataCategory]):
                 col_name_values=self._col_values,
             )
         return self._frames
+
+    def to_validator_dict(
+        self,
+        *,
+        variant: Literal["ddl2"] = "ddl2"
+    ) -> dict:
+        return to_validator_dict(self, variant=variant)
 
     def __repr__(self) -> str:
         return f"CIFBlock(code={self.code!r}, type={self.type!r}, variant={self._variant!r}, categories={len(self)}, frames={len(self.frames)})"
