@@ -1,12 +1,15 @@
 """DDL2 validator."""
 
-from typing import Any, Sequence, Literal
+from typing import Any, Sequence, Literal, Callable
+from functools import partial
 
 import polars as pl
 
 from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
 from ._validator import CIFFileValidator
 from ._ddl2_model import DDL2Dictionary
+from ._ddl2_types import Caster, CastPlan
+from ._re import normalize_for_rust_regex
 
 
 class DDL2Validator(CIFFileValidator):
@@ -15,12 +18,36 @@ class DDL2Validator(CIFFileValidator):
     def __init__(
         self,
         dictionary: dict,
-        binary_enum_to_bool: bool = True,
-        bool_true: Sequence[str] = ("yes", "y", "true"),
-        bool_false: Sequence[str] = ("no", "n", "false"),
+        *,
+        enum_to_bool: bool = True,
+        enum_true: Sequence[str] = ("yes", "y", "true"),
+        enum_false: Sequence[str] = ("no", "n", "false"),
+        esd_col_suffix: str = "_esd",
+        dtype_float: pl.DataType = pl.Float64,
+        dtype_int: pl.DataType = pl.Int64,
+        cast_strict: bool = True,
+        bool_true: Sequence[str] = ("YES",),
+        bool_false: Sequence[str] = ("NO",),
+        bool_strip: bool = True,
+        bool_case_insensitive: bool = True,
+        datetime_output: Literal["auto", "date", "datetime"] = "auto",
+        datetime_time_zone: str | None = None,
     ) -> None:
         super().__init__(dictionary)
         DDL2Dictionary(**dictionary)  # validate dictionary structure
+        self._caster = Caster(
+            esd_col_suffix=esd_col_suffix,
+            dtype_float=dtype_float,
+            dtype_int=dtype_int,
+            cast_strict=cast_strict,
+            bool_true=bool_true,
+            bool_false=bool_false,
+            bool_strip=bool_strip,
+            bool_case_insensitive=bool_case_insensitive,
+            datetime_output=datetime_output,
+            datetime_time_zone=datetime_time_zone,
+        )
+
         dictionary["mandatory_categories"] = mandatory_categories = []
         for category_id, category in dictionary["category"].items():
 
@@ -34,8 +61,8 @@ class DDL2Validator(CIFFileValidator):
                 for group_id in category.get("groups", [])
             }
 
-        self._bool_true = set(bool_true)
-        self._bool_false = set(bool_false)
+        self._bool_true = set(enum_true)
+        self._bool_false = set(enum_false)
 
         bool_enums = self._bool_true | self._bool_false
 
@@ -52,14 +79,13 @@ class DDL2Validator(CIFFileValidator):
 
             item_type = item["type"]
 
-            if binary_enum_to_bool and "enumeration" in item and all(enum in bool_enums for enum in item["enumeration"].values()):
+            if enum_to_bool and "enumeration" in item and all(enum in bool_enums for enum in item["enumeration"].keys()):
                 item_type = item["type"] = "boolean"
                 item.pop("enumeration")
 
-
             item_type_info = dictionary["item_type"][item_type]
             item["type_primitive"] = item_type_info["primitive"]
-            item["type_regex"] = item_type_info["regex"]
+            item["type_regex"] = normalize_for_rust_regex(item_type_info["regex"]).pattern
             item["type_detail"] = item_type_info.get("detail")
         return
 
@@ -152,10 +178,30 @@ class DDL2Validator(CIFFileValidator):
             cat.groups = catdef["groups"]
             cat.keys = catdef["keys"]
 
+
+        item_defs = {}
+        for data_item in cat:
+            try:
+                itemdef = self["item"][data_item.name]
+            except KeyError:
+                raise ValueError(
+                    f"DDL2Validator: Data item '{data_item.name}' "
+                    f"not defined in DDL2 dictionary."
+                )
+            item_defs[data_item.code] = itemdef
+
+        new_df, item_errs = validate_mmcif_category_table(
+            cat.df,
+            item_defs,
+            case_normalization="lower",
+        )
+        errs.extend(item_errs)
+        cat.df = new_df
+
         # Add item info
         if add_item_info:
             for data_item in cat:
-                itemdef = self["item"][data_item.name]
+                itemdef = item_defs[data_item.code]
                 data_item.description = itemdef["description"]
                 data_item.mandatory = itemdef["mandatory"]
                 data_item.default = itemdef.get("default")
@@ -163,13 +209,19 @@ class DDL2Validator(CIFFileValidator):
                 data_item.dtype = itemdef.get("type")
                 data_item.range = itemdef.get("range")
                 data_item.unit = itemdef.get("units")
-        return []
+
+
+        return errs
 
 
 def validate_mmcif_category_table(
     table: pl.DataFrame,
     item_defs: dict[str, dict[str, Any]],
+    caster: Callable[[str | pl.Expr, str], list[CastPlan]],
     case_normalization: Literal["lower", "upper"] | None = "lower",
+    enum_to_bool: bool = True,
+    enum_true: Sequence[str] = ("yes", "y", "true"),
+    enum_false: Sequence[str] = ("no", "n", "false"),
 ) -> tuple[pl.DataFrame, list[dict[str, Any]]]:
     """Validate an mmCIF category table against category item definitions.
 
@@ -177,7 +229,10 @@ def validate_mmcif_category_table(
     ----------
     table
         mmCIF category table as a Polars DataFrame.
-        Each column corresponds to a data item.
+        Each column corresponds to a data item,
+        and all values are strings or nulls.
+        Strings represent parsed mmCIF values,
+        i.e., with no surrounding quotes.
     item_defs
         Dictionary of data item definitions for the category.
         Keys are data item keywords (column names),
@@ -193,23 +248,56 @@ def validate_mmcif_category_table(
           it indicates that only that exact value is allowed.
           The allowed range for the data item is the union of all specified ranges.
           If `None`, no range is specified.
-        - "caster" (function): Data type casting function for the data item.
-          The function takes a Polars expression (column) as input
-          and returns a list of one or several Polars expressions:
-          the first expression yields the casted data column,
-          this may be a nested structure such as a List, Array, List of Array, etc.
-          Any subsequent expressions yield auxiliary columns derived from the data column,
-          such as estimated standard deviations (ESDs) for floating-point data items.
+        - "type" (string): Data item type code, corresponding to a DDL2 item type defined.
         - "type_primitive" ({"numb", "char", "uchar"}): Primitive data type code; one of:
           - "numb": numerically intererpretable string
           - "char": case-sensitive character or text string
           - "uchar": case-insensitive character or text string
         - "type_regex" (string): Data type construct (regex).
+    caster
+        Data type casting function for the data item.
+        The function takes a column name or Polars expression as first input,
+        and the data type code (`item_defs[item]["type"]`) as second input,
+        and returns a list of one or several `CastPlan` objects with the following attributes:
+        - `expr` (pl.Expr): Polars expression that yields a column from the input column.
+        - `dtype` (literal): Type of the leaf data values produced by the expression; one of:
+            - "str": string
+            - "float": floating-point number
+            - "int": integer
+            - "bool": boolean
+            - "date": date/datetime
+        - `container` (literal or None): Container type of the data values; one of:
+            - None: No container; scalar values
+            - "list": List of values
+            - "array": Array of values
+            - "array_list": List of arrays of values
+
+            Together with `dtype`, this indicates the structure of the data values.
+            For example, if `dtype` is "float" and `container` is "array_list",
+            it indicates that each element in the output column
+            is a List of Arrays of floating-point numbers.
+        - `suffix` (string): Suffix to add to the input column name for the output column.
+          If empty string, the output column has the same name as the input column.
+        - `main` (boolean): Whether the column contains main data values,
+          i.e., values for which other validations (enumeration, range) are performed.
+          If `False`, the column contains auxiliary data values
+          (e.g., estimated standard deviations) that are not subject to these validations.
+          Note that more than one main column may be produced by the caster function.
+
+        The input column is thus replaced with the set of columns produced by the caster function.
+        Note that the suffix may cause name collisions with existing columns in the table.
+        These are handled as described below.
     case_normalization
         Case normalization for "uchar" (case-insensitive character) data items.
         If "lower", all values are converted to lowercase.
         If "upper", all values are converted to uppercase.
         If `None`, no case normalization is performed.
+    enum_to_bool
+        Whether to interpret enumerations with boolean-like values as booleans.
+    enum_true
+        List of strings representing `True` values for boolean enumerations.
+    enum_false
+        List of strings representing `False` values for boolean enumerations.
 
     Returns
     -------
@@ -219,6 +307,8 @@ def validate_mmcif_category_table(
         List of validation error dictionaries.
         Each dictionary contains the following key-value pairs:
         - "item" (string): Data item (column) name.
+        - "column" (string): Specific column name in the DataFrame where the error occurred.
+          When the caster produces multiple columns for a data item, this indicates the specific column.
         - "row_indices" (list of int): List of row indices (0-based) with validation errors for the data item.
         - "error_type" (string): Type of validation error.
           One of: "missing_value", "construct_mismatch", "enum_violation",
@@ -240,27 +330,38 @@ def validate_mmcif_category_table(
     4. The data is converted to the appropriate data type
        using the caster function defined for the data item.
        This also converts any inapplicable (".") values to nulls/NaNs/empty strings
-       as appropriate for the data type.
+       as appropriate for the data type
+       (i.e., NaN for float, empty string for string, null for boolean/integer/date types).
     5. If the item has an enumeration defined,
-       all (innermost) values in the column that are not null/NaN/empty are checked against the enumeration,
+       all values in the "main" produced columns that are not null/NaN/empty strings
+       are checked against the enumeration,
        and column names and row indices of values not in the enumeration are collected.
        If all values are in the enumeration, the column is replaced
-       with a categorical column with categories defined by the enumeration.
-       If the data item is of primitive type "uchar"
+       with an Enum column (or List/Array of Enum, if applicable) with fixed categories defined by the enumeration.
+       If `enum_to_bool` is `True` and the  values corresponds to boolean-like values
+       (i.e., all enumeration values are in `enum_true` or `enum_false`; case-insensitive),
+       the column is replaced with a boolean column.
+       Note that if the data item is of primitive type "uchar"
        and case normalization is specified,
-       the enumeration values are normalized to the specified case before checking.
+       the enumeration values are also normalized to the specified case before checking/conversion.
     6. If the item has a range defined,
-       all (innermost) values in the column are checked against the range,
+       all values in the "main" produced columns are checked against the range,
        and column names and row indices of values outside the range are collected.
-    7. If the caster function produces auxiliary columns,
-       these are added to the output DataFrame with column names
-       specified by the caster function.
-       If the produced auxiliary columns already exist in the input table,
-       - for rows where the input auxiliary column is null/NaN,
-         the value from the caster-produced column is used,
-       - for rows where the input auxiliary column is not null/NaN,
-         it is compared with the caster-produced column,
-         and any discrepancies are collected.
+       A range is only defined for numeric data items.
+    7. The input column is replaced with the casted and transformed column(s).
+       It may be the case that the caster function produces columns with names
+       that already exist in the input table (due to suffixes; e.g.,
+       an input column "coord" may need to be replaced with "coord" and "coord_esd",
+       while "coord_esd" may already exist in the input table).
+       In this case, for each such column:
+         - For rows where the casted original column value is null/NaN,
+           the value from the caster-produced column is used.
+         - For rows where the casted original column value is not null/NaN,
+           it is compared with the caster-produced column,
+           and any discrepancies are collected.
+
+        Note that this step is performed after all columns have been processed,
+        since otherwise we may be comparing one casted column against another non-casted raw column.
     """
     def _normalize_case_expr(expr: pl.Expr, mode: Literal["lower", "upper"]) -> pl.Expr:
         if mode == "lower":
@@ -271,15 +372,6 @@ def validate_mmcif_category_table(
         if mode == "lower":
             return [v.lower() for v in values]
         return [v.upper() for v in values]
-
-    def _is_nullish_scalar(expr: pl.Expr) -> pl.Expr:
-        # "nullish" here means: null OR NaN OR empty string
-        # (covers typical aux columns and scalar data after casting).
-        return (
-            expr.is_null()
-            | pl.when(expr.is_nan().is_not_null()).then(expr.is_nan()).otherwise(False)
-            | pl.when(expr.dtype == pl.Utf8).then(expr == "").otherwise(False)  # best-effort
-        )
 
     def _safe_is_nan(expr: pl.Expr) -> pl.Expr:
         # Polars raises for is_nan on non-floats; guard it.
@@ -392,21 +484,16 @@ def validate_mmcif_category_table(
     # Only validate items that are present in item_defs and exist in the table.
     # (No implicit creation of missing columns here.)
     for item, idef in item_defs.items():
-        if item not in df.columns:
-            continue
 
         default: str | None = idef.get("default")
         enum: list[str] | None = idef.get("enum")
         ranges: list[tuple[float | None, float | None]] | None = idef.get("range")
-        caster = idef.get("caster")
-        type_primitive: str = idef.get("type_primitive")
-        type_regex: str = idef.get("type_regex")
-
-        if not callable(caster):
-            raise TypeError(f'item_defs["{item}"]["caster"] must be callable')
+        caster = idef["caster"]
+        type_primitive: str = idef["type_primitive"]
+        type_regex: str = idef["type_regex"]
 
         # --- Step 1: handle "?" missing values (and collect missing_value errors if no default).
-        missing_mask = pl.col(item).cast(pl.Utf8) == pl.lit("?")
+        missing_mask = pl.col(item) == pl.lit("?")
         if default is not None:
             df = df.with_columns(
                 pl.when(missing_mask).then(pl.lit(default)).otherwise(pl.col(item)).alias(item)
@@ -418,50 +505,35 @@ def validate_mmcif_category_table(
                     {"item": item, "row_indices": missing_rows, "error_type": "missing_value"}
                 )
             df = df.with_columns(
-                pl.when(missing_mask).then(pl.lit(None)).otherwise(pl.col(item)).alias(item)
+                pl.when(missing_mask).then(pl.lit(None)).otherwise(pl.col(item))
             )
 
         # --- Step 2: construct regex check (exclude null and "." only).
         # Treat the table as strings here; mmCIF raw tables commonly are strings.
-        non_null_non_dot = pl.col(item).is_not_null() & (pl.col(item).cast(pl.Utf8) != pl.lit("."))
-        construct_ok = _fullmatch_regex_expr(pl.col(item).cast(pl.Utf8), type_regex)
-        construct_mismatch_mask = non_null_non_dot & (~construct_ok)
-        construct_bad_rows = _collect_row_indices(df, construct_mismatch_mask)
-        if construct_bad_rows:
-            errors.append(
-                {
-                    "item": item,
-                    "row_indices": construct_bad_rows,
-                    "error_type": "construct_mismatch",
-                }
-            )
+        # non_null_non_dot = pl.col(item).is_not_null() & (pl.col(item).cast(pl.Utf8) != pl.lit("."))
+        # construct_ok = _fullmatch_regex_expr(pl.col(item).cast(pl.Utf8), type_regex)
+        # construct_mismatch_mask = non_null_non_dot & (~construct_ok)
+        # construct_bad_rows = _collect_row_indices(df, construct_mismatch_mask)
+        # if construct_bad_rows:
+        #     errors.append(
+        #         {
+        #             "item": item,
+        #             "row_indices": construct_bad_rows,
+        #             "error_type": "construct_mismatch",
+        #         }
+        #     )
 
         # --- Step 3: normalize case for uchar (applied on non-null and not ".")
         if type_primitive == "uchar" and case_normalization in ("lower", "upper"):
-            norm = case_normalization
-            df = df.with_columns(
-                pl.when(pl.col(item).is_null() | (pl.col(item).cast(pl.Utf8) == pl.lit(".")))
-                .then(pl.col(item))
-                .otherwise(_normalize_case_expr(pl.col(item).cast(pl.Utf8), norm))
-                .alias(item)
-            )
+            df = df.with_columns(_normalize_case_expr(pl.col(item), case_normalization))
 
         # --- Step 4: cast via caster; add/merge auxiliary columns
         exprs = caster(pl.col(item))
-        if not isinstance(exprs, list) or not exprs:
-            raise TypeError(f'caster for "{item}" must return a non-empty list of Polars expressions')
+        if isinstance(exprs, pl.Expr):
+            exprs = [exprs]
 
         main_expr = exprs[0]
-        # Ensure the main expression aliases back to the item name
-        if getattr(main_expr, "meta", None) is not None:
-            try:
-                out_name = main_expr.meta.output_name()
-            except Exception:
-                out_name = None
-        else:
-            out_name = None
-        if out_name != item:
-            main_expr = main_expr.alias(item)
+
 
         produced_aux_exprs: list[pl.Expr] = []
         produced_aux_names: list[str] = []
