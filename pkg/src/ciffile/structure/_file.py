@@ -3,6 +3,7 @@
 from typing import Literal
 
 from ciffile.typing import DataFrameLike
+from ciffile.validation import dictionary as to_validator_dict
 from ._block import CIFBlock
 from ._base import CIFStructureWithFrame
 
@@ -38,6 +39,14 @@ class CIFFile(CIFStructureWithFrame[CIFBlock]):
             col_name_values=col_name_values,
         )
         return
+
+    def to_validator_dict(
+        self,
+        block: int | str = 0,
+        *,
+        variant: Literal["ddl2"] = "ddl2"
+    ) -> dict:
+        return to_validator_dict(self[block], variant=variant)
 
     def __repr__(self) -> str:
         """Representation of the CIF file."""
