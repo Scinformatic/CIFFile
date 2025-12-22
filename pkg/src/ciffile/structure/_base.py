@@ -204,6 +204,17 @@ class CIFStructure(Generic[ElementType], metaclass=ABCMeta):
             self._element_dict = self._get_elements()
         return self._element_dict
 
+    def refresh(self) -> None:
+        """Refresh cached element codes and element mapping.
+
+        This forces re-generation of the element codes
+        and the mapping from codes to element objects
+        the next time they are accessed.
+        """
+        self._codes = None
+        self._element_dict = None
+        return
+
     @abstractmethod
     def _get_codes(self) -> list[str]:
         """Get codes of the data containers directly within this container.
