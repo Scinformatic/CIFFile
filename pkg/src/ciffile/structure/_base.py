@@ -268,7 +268,7 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
     ) -> None:
         super().__init__(**kwargs)
 
-        self._df = content if isinstance(content, pl.DataFrame) else pl.DataFrame(content)
+        self._df = content if isinstance(content, pl.DataFrame) else pl.DataFrame(content, strict=False)
         self._variant: Literal["cif1", "mmcif"] = variant
 
         str_header = None
