@@ -19,38 +19,9 @@ if TYPE_CHECKING:
 class DDL2Validator(CIFFileValidator):
     """DDL2 validator for CIF files."""
 
-    def __init__(
-        self,
-        dictionary: dict,
-        *,
-        enum_to_bool: bool = True,
-        enum_true: Sequence[str] = ("yes", "y", "true"),
-        enum_false: Sequence[str] = ("no", "n", "false"),
-        esd_col_suffix: str = "_esd_digits",
-        dtype_float: pl.DataType = pl.Float64,
-        dtype_int: pl.DataType = pl.Int64,
-        cast_strict: bool = True,
-        bool_true: Sequence[str] = ("YES",),
-        bool_false: Sequence[str] = ("NO",),
-        bool_strip: bool = True,
-        bool_case_insensitive: bool = True,
-        datetime_output: Literal["auto", "date", "datetime"] = "auto",
-        datetime_time_zone: str | None = None,
-    ) -> None:
+    def __init__(self, dictionary: dict) -> None:
         super().__init__(dictionary)
         DDL2Dictionary(**dictionary)  # validate dictionary structure
-        self._caster = Caster(
-            esd_col_suffix=esd_col_suffix,
-            dtype_float=dtype_float,
-            dtype_int=dtype_int,
-            cast_strict=cast_strict,
-            bool_true=bool_true,
-            bool_false=bool_false,
-            bool_strip=bool_strip,
-            bool_case_insensitive=bool_case_insensitive,
-            datetime_output=datetime_output,
-            datetime_time_zone=datetime_time_zone,
-        )
 
         dictionary["mandatory_categories"] = mandatory_categories = []
         for category_id, category in dictionary["category"].items():
@@ -64,11 +35,6 @@ class DDL2Validator(CIFFileValidator):
                 group_id: dictionary["category_group"][group_id]
                 for group_id in category.get("groups", [])
             }
-
-        self._bool_true = set(enum_true)
-        self._bool_false = set(enum_false)
-
-        bool_enums = self._bool_true | self._bool_false
 
         for item_name, item in dictionary["item"].items():
 
@@ -87,6 +53,19 @@ class DDL2Validator(CIFFileValidator):
             item["type_primitive"] = item_type_info["primitive"]
             item["type_regex"] = _normalize_for_rust_regex(item_type_info["regex"])
             item["type_detail"] = item_type_info.get("detail")
+
+        self._caster: Caster = Caster()
+        self._curr_block_code: str | None = None
+        self._curr_frame_code: str | None = None
+        self._curr_category_code: str | None = None
+        self._curr_item_defs: dict[str, dict[str, Any]] = {}
+        self._add_category_info: bool = True
+        self._add_item_info: bool = True
+        self._uchar_case_normalization: Literal["lower", "upper"] | None = "lower"
+        self._enum_to_bool: bool = True
+        self._enum_true: set[str] = {"yes", "y", "true"}
+        self._enum_false: set[str] = {"no", "n", "false"}
+        self._errs: list[dict[str, Any]] = []
         return
 
     @property
@@ -107,84 +86,81 @@ class DDL2Validator(CIFFileValidator):
     def validate(
         self,
         file: CIFFile | CIFBlock | CIFDataCategory,
+        *,
+        # Casting options
+        esd_col_suffix: str = "_esd_digits",
+        dtype_float: pl.DataType = pl.Float64,
+        dtype_int: pl.DataType = pl.Int64,
+        cast_strict: bool = True,
+        bool_true: Sequence[str] = ("YES",),
+        bool_false: Sequence[str] = ("NO",),
+        bool_strip: bool = True,
+        bool_case_insensitive: bool = True,
+        datetime_output: Literal["auto", "date", "datetime"] = "auto",
+        datetime_time_zone: str | None = None,
+        uchar_case_normalization: Literal["lower", "upper"] | None = "lower",
+        # Enum options
+        enum_to_bool: bool = True,
+        enum_true: Sequence[str] = ("yes", "y", "true"),
+        enum_false: Sequence[str] = ("no", "n", "false"),
+        # Info options
         add_category_info: bool = True,
         add_item_info: bool = True,
     ) -> pl.DataFrame:
-        def validate_category(
-            category: CIFDataCategory,
-            parent_block_code: str | None = None,
-            parent_frame_code: str | None = None,
-        ) -> list:
-            return self._validate_category(
-                category,
-                parent_block_code=parent_block_code,
-                parent_frame_code=parent_frame_code,
-                add_category_info=add_category_info,
-                add_item_info=add_item_info,
-            )
+        """Validate a CIF file, block, or category against the DDL2 dictionary."""
+        self._add_category_info = add_category_info
+        self._add_item_info = add_item_info
+        self._uchar_case_normalization = uchar_case_normalization
+        self._enum_to_bool = enum_to_bool
+        self._enum_true = {v.lower() for v in enum_true}
+        self._enum_false = {v.lower() for v in enum_false}
+        self._enum_bool = self._enum_true | self._enum_false
+        self._caster = Caster(
+            esd_col_suffix=esd_col_suffix,
+            dtype_float=dtype_float,
+            dtype_int=dtype_int,
+            cast_strict=cast_strict,
+            bool_true=bool_true,
+            bool_false=bool_false,
+            bool_strip=bool_strip,
+            bool_case_insensitive=bool_case_insensitive,
+            datetime_output=datetime_output,
+            datetime_time_zone=datetime_time_zone,
+        )
+        self._errs = []
 
         if file.container_type == "category":
             return pl.DataFrame(validate_category(file))
 
-        blocks = [file] if file.container_type == "block" else file
-        errs = []
+        blocks: list[CIFBlock] = [file] if file.container_type == "block" else file
         for block in blocks:
+            self._curr_block_code = block.code
             for mandatory_cat in self._dict["mandatory_categories"]:
+                self._curr_category_code = mandatory_cat
                 if mandatory_cat not in block:
-                    errs.append(
-                        self._err(
-                            type="missing_category",
-                            block=block.code,
-                            category=mandatory_cat,
-                        )
-                    )
+                    self._err("missing_category")
             for frame in block.frames:
+                self._curr_frame_code = frame.code
                 for frame_category in frame:
-                    frame_errs = validate_category(
-                        frame_category, parent_block_code=block.code, parent_frame_code=frame.code
-                    )
-                    errs.extend(frame_errs)
+                    self._curr_category_code = frame_category.code
+                    self._validate_category(frame_category)
             for block_category in block:
-                block_errs = validate_category(block_category, parent_block_code=block.code)
-                errs.extend(block_errs)
-        return pl.DataFrame(errs)
+                self._curr_category_code = block_category.code
+                self._validate_category(block_category)
+        return pl.DataFrame(self._errs)
 
-    def _validate_category(
-        self,
-        cat: CIFDataCategory,
-        parent_block_code: str | None,
-        parent_frame_code: str | None,
-        add_category_info: bool,
-        add_item_info: bool,
-    ) -> list:
-
-        errs = []
+    def _validate_category(self, cat: CIFDataCategory) -> None:
 
         catdef = self["category"].get(cat.code)
         if catdef is None:
-            errs.append(
-                self._err(
-                    type="undefined_category",
-                    block=parent_block_code,
-                    frame=parent_frame_code,
-                    category=cat.code,
-                )
-            )
+            self._err(type="undefined_category")
         else:
             # Check existence of mandatory items in category
             for mandatory_item_name in catdef["mandatory_items"]:
                 if mandatory_item_name not in cat.item_names:
-                    errs.append(
-                        self._err(
-                            type="missing_item",
-                            block=parent_block_code,
-                            frame=parent_frame_code,
-                            category=cat.code,
-                            item=mandatory_item_name,
-                        )
-                    )
+                    self._err("missing_item", item=mandatory_item_name)
             # Add category info
-            if add_category_info:
+            if self._add_category_info:
                 cat.description = catdef["description"]
                 cat.groups = catdef["groups"]
                 cat.keys = catdef["keys"]
@@ -193,32 +169,18 @@ class DDL2Validator(CIFFileValidator):
         for data_item in cat:
             itemdef = self["item"].get(data_item.name)
             if itemdef is None:
-                errs.append(
-                    self._err(
-                        type="undefined_item",
-                        block=parent_block_code,
-                        frame=parent_frame_code,
-                        category=cat.code,
-                        item=data_item.code,
-                    )
-                )
+                self._err("undefined_item", item=data_item.code)
             else:
                 item_defs[data_item.code] = itemdef
 
-        new_df, item_errs = self._validate_mmcif_category_table(
-            block=parent_block_code,
-            frame=parent_frame_code,
-            category=cat.code,
-            table=cat.df,
-            item_defs=item_defs,
-            caster=self._caster,
-            case_normalization="lower",
-        )
-        errs.extend(item_errs)
-        cat.df = new_df
+        self._curr_item_defs = {
+            k: v for k, v in item_defs.items() if k in cat.df.columns
+        }
+
+        cat.df = self._validate_items(cat.df)
 
         # Add item info
-        if add_item_info:
+        if self._add_item_info:
             for data_item in cat:
                 itemdef = item_defs.get(data_item.code)
                 if itemdef is None:
@@ -230,21 +192,9 @@ class DDL2Validator(CIFFileValidator):
                 data_item.dtype = itemdef.get("type")
                 data_item.range = itemdef.get("range")
                 data_item.unit = itemdef.get("units")
-        return errs
+        return
 
-    def _validate_mmcif_category_table(
-        self,
-        block: str | None,
-        frame: str | None,
-        category: str | None,
-        table: pl.DataFrame,
-        item_defs: dict[str, dict[str, Any]],
-        caster: Callable[[str | pl.Expr, str], list[CastPlan]],
-        case_normalization: Literal["lower", "upper"] | None = "lower",
-        enum_to_bool: bool = True,
-        enum_true: Sequence[str] = ("yes", "y", "true"),
-        enum_false: Sequence[str] = ("no", "n", "false"),
-    ) -> tuple[pl.DataFrame, list[dict[str, Any]]]:
+    def _validate_items(self, table: pl.DataFrame) -> pl.DataFrame:
         """Validate an mmCIF category table against category item definitions.
 
         Parameters
@@ -392,472 +342,320 @@ class DDL2Validator(CIFFileValidator):
                 raise TypeError(f"table column {name!r} must be Utf8 or Null; got {dt!r}")
 
         df = table.clone()
-        errors: list[dict[str, Any]] = []
 
-        # Temporary column naming: unique per (input_item, produced_output_name).
-        TMP_PREFIX = "__tmp__"
+        # 1. Set defaults / collect missing values
+        df = self._table_set_defaults(df)
 
-        @dataclass(frozen=True)
-        class Produced:
-            """One produced (temporary) column emitted by one caster for one input item."""
-            item: str
-            out: str
-            tmp: str
-            plan: Any  # CastPlan (defined elsewhere)
-            type_primitive: str
-            type_code: str
-            enum_vals_norm: list[str] | None
-            ranges: list[tuple[float | None, float | None]] | None
+        # 2. Validate regex patterns (ignore null and ".")
+        self._table_check_regex(df)
 
-        produced_by_name: dict[str, list[Produced]] = {}
-        processed_items: set[str] = set()
+        # 3. Case normalization for "uchar"
+        if self._uchar_case_normalization:
+            df = self._table_uchar_normalization(df)
 
-        def _collect_rows(mask: pl.Expr) -> list[int]:
-            # Eager: returns row indices where mask is True.
-            return df.select(pl.arg_where(mask)).to_series(0).to_list()
+        # 4. Cast data types
+        df, produced_columns = self._table_cast(df)
 
-        def _normalize_vals(vals: Sequence[str], mode: Literal["lower", "upper"]) -> list[str]:
-            return [v.lower() for v in vals] if mode == "lower" else [v.upper() for v in vals]
+        # 5. Apply enumerations
+        df = self._table_enum(df, produced_columns=produced_columns)
 
-        true_ci = {v.lower() for v in enum_true}
-        false_ci = {v.lower() for v in enum_false}
+        # 6. Range validation
+        self._table_ranges(df, produced_columns=produced_columns)
 
-        def _leaf_nullish_for_validation(el: pl.Expr, plan: Any) -> pl.Expr:
-            """
-            Nullish markers (to be ignored) for enum/range validation, at the LEAF level.
+        return df
 
-            Per spec:
-            - float: null or NaN
-            - str: null or empty string
-            - int/bool/date: null
-            """
-            if plan.dtype == "float":
-                return el.is_null() | el.is_nan()
-            if plan.dtype == "str":
-                return el.is_null() | (el == pl.lit(""))
-            return el.is_null()
+    def _table_set_defaults(self, table: pl.DataFrame) -> pl.DataFrame:
+        """Replace missing values ("?") with defaults in an mmCIF category table.
 
-        def _row_nullish_for_merge(col: pl.Expr, plan: Any) -> pl.Expr:
-            """
-            Nullish markers for Step 7 merge decision, at the ROW level.
+        For each item (column), if the item has a default value defined,
+        all missing ("?") values in the column
+        are replaced with the default value.
+        Otherwise, the item (column) name and the row indices
+        of missing values are collected,
+        and missing values are replaced with nulls.
 
-            Per spec Step 7: null/NaN.
-            Practical, unambiguous interpretation:
-            - scalar float: null or NaN means "missing"
-            - everything else (including containers): only null means "missing"
-            (NaNs inside containers do not make the whole row "missing")
-            """
-            if plan.dtype == "float" and plan.container is None:
-                return col.is_null() | col.is_nan()
-            return col.is_null()
+        Parameters
+        ----------
+        table
+            mmCIF category table as a Polars DataFrame.
+            Each column corresponds to a data item,
+            and all values are strings or nulls.
+            Strings represent parsed mmCIF values,
+            i.e., with no surrounding quotes.
+        item_defs
+            Dictionary of data item definitions for the category.
+            Keys are data item keywords (column names),
+            and values are dictionaries with the following key-value pairs:
+            - "default" (string | None): Default value for the data item (as a string),
+            or `None` if no default is specified.
+        block
+            Current block code for error reporting.
+        frame
+            Current frame code for error reporting.
+        category
+            Current category name for error reporting.
 
-        def _any_violation(col: pl.Expr, plan: Any, pred_leaf: Callable[[pl.Expr], pl.Expr]) -> pl.Expr:
-            """
-            Per-row boolean: True if ANY innermost leaf element violates pred_leaf.
-            Container semantics (as agreed):
-            - None: scalar
-            - list: validate elements
-            - array: validate all array elements
-            - array_list: validate all elements in each array in the list
-            """
-            if plan.container is None:
-                return pred_leaf(col)
-            if plan.container == "list":
-                return col.list.eval(pred_leaf(pl.element())).list.any()
-            if plan.container == "array":
-                return col.arr.eval(pred_leaf(pl.element())).arr.any()
-            if plan.container == "array_list":
-                return col.list.eval(
-                    pl.element().arr.eval(pred_leaf(pl.element())).arr.any()
-                ).list.any()
-            raise ValueError(f"Unsupported container: {plan.container!r}")
+        Returns
+        -------
+        updated_table
+            Updated mmCIF category table as a Polars DataFrame,
+            with missing values replaced as specified.
+        missing_value_errors
+            List of missing value error dictionaries.
+        """
+        # Build replacement expressions in one shot.
+        replace_exprs: list[pl.Expr] = []
+        miss_mask_exprs: list[pl.Expr] = []
+        mask_col_prefix = "__missing_mask_col__"
+        mask_cols: list[str] = []
 
-        def _map_leaves(col: pl.Expr, plan: Any, mapper: Callable[[pl.Expr], pl.Expr]) -> pl.Expr:
-            """
-            Apply `mapper` to each innermost leaf element, preserving container structure.
-            """
-            if plan.container is None:
-                return mapper(col)
-            if plan.container == "list":
-                return col.list.eval(mapper(pl.element()))
-            if plan.container == "array":
-                return col.arr.eval(mapper(pl.element()))
-            if plan.container == "array_list":
-                return col.list.eval(pl.element().arr.eval(mapper(pl.element())))
-            raise ValueError(f"Unsupported container: {plan.container!r}")
+        for item_name, item_def in self._curr_item_defs.items():
+            col = pl.col(item_name)
+            default = item_def.get("default")
+            is_missing = col == pl.lit("?")
+            replace_exprs.append(
+                pl.when(is_missing).then(pl.lit(default)).otherwise(col).alias(item_name)
+            )
+            if default is None:
+                # Track missing masks for error collection (only no-default items).
+                mask_name = f"{mask_col_prefix}{item_name}"
+                miss_mask_exprs.append(is_missing.alias(mask_name))
+                mask_cols.append(mask_name)
 
-        def _allowed_by_ranges(el: pl.Expr, ranges: list[tuple[float | None, float | None]]) -> pl.Expr:
-            """
-            Leaf predicate: True if `el` lies in the union of the specified ranges.
-            Ranges are exclusive bounds, except lo==hi means exact match.
-            """
-            allowed: pl.Expr | None = None
-            for lo, hi in ranges:
-                if lo is None and hi is None:
-                    ok = pl.lit(True)
-                elif lo is not None and hi is not None and lo == hi:
-                    ok = el == pl.lit(lo)
-                else:
-                    ok = pl.lit(True)
-                    if lo is not None:
-                        ok = ok & (el > pl.lit(lo))
-                    if hi is not None:
-                        ok = ok & (el < pl.lit(hi))
-                allowed = ok if allowed is None else (allowed | ok)
-            return allowed if allowed is not None else pl.lit(True)
+        # Apply all replacements (and optionally mask cols) in one with_columns.
+        # If no missing masks, return directly.
+        if not miss_mask_exprs:
+            return table.with_columns(replace_exprs)
 
-        # ---------------------------------------------------------------------
-        # 1–6) Per input item: missing/default, regex, normalization, cast, enum/range checks
-        # ---------------------------------------------------------------------
-        for item, idef in item_defs.items():
-            if item not in df.columns:
-                # Item not present in table; skip.
-                # Missing mandatory items are handled upstream.
-                continue
+        # Add masks temporarily for the single-pass error query.
+        tmp = table.with_row_index("__row_idx").with_columns(replace_exprs + miss_mask_exprs)
 
-            processed_items.add(item)
+        # Collect missing rows for all no-default items in one go.
+        # Turn the boolean mask columns into long form:
+        #   __row_idx | variable (__miss__col) | value (bool)
+        long = (
+            tmp.select(["__row_idx"] + mask_cols)
+            .unpivot(index="__row_idx", variable_name="__miss_col", value_name="__is_missing")
+            .filter(pl.col("__is_missing"))
+            .with_columns(pl.col("__miss_col").str.strip_prefix(mask_col_prefix).alias("item"))
+            .group_by("item")
+            .agg(pl.col("__row_idx").cast(pl.Int64).alias("row_indices"))
+        )
 
-            default = idef.get("default")
-            enum = list(idef.get("enumeration", {}).keys())
-            ranges = idef.get("range")
-            type_code = idef["type"]
-            type_prim = idef["type_primitive"]
-            type_regex = idef["type_regex"]
+        miss_map = {r["item"]: r["row_indices"] for r in long.to_dicts()}
 
-            col = pl.col(item).cast(pl.Utf8, strict=False)
+        for item_name, row_indices in miss_map.items():
+            self._err(
+                type="missing_value",
+                item=item_name,
+                column=item_name,
+                rows=row_indices,
+            )
 
-            # -----------------------------------------------------------------
-            # Step 1: Replace missing "?" with default, else record missing_value and set to null
-            # -----------------------------------------------------------------
-            miss = col == pl.lit("?")
-            if default is not None:
-                df = df.with_columns(
-                    pl.when(miss).then(pl.lit(str(default))).otherwise(col).alias(item)
-                )
-            else:
-                miss_rows = _collect_rows(miss)
-                if miss_rows:
-                    errors.append(
-                        self._err(
-                            type="missing_value",
-                            block=block,
-                            frame=frame,
-                            category=category,
-                            item=item,
-                            column=item,
-                            rows=miss_rows,
-                        )
-                    )
-                df = df.with_columns(
-                    pl.when(miss).then(pl.lit(None)).otherwise(col).alias(item)
-                )
+        # Return table without temporary columns.
+        updated = tmp.drop(["__row_idx"] + mask_cols)
+        return updated
 
-            col = pl.col(item).cast(pl.Utf8, strict=False)
-
-            # -----------------------------------------------------------------
-            # Step 2: Construct regex check (ignore null and ".")
-            # -----------------------------------------------------------------
-            check = col.is_not_null() & (col != pl.lit("."))
-            construct_bad = check & (~col.str.contains(f"^(?:{type_regex})$"))
-            bad_rows = _collect_rows(construct_bad)
+    def _table_check_regex(self, table: pl.DataFrame) -> None:
+        """Check regex constraints on table columns."""
+        for item_name, item_def in self._curr_item_defs.items():
+            col = pl.col(item_name)
+            type_regex = item_def["type_regex"]
+            has_value = col.is_not_null() & (col != pl.lit("."))
+            regex_violation = has_value & (~col.str.contains(f"^(?:{type_regex})$"))
+            bad_rows = table.select(pl.arg_where(regex_violation)).to_series(0).to_list()
             if bad_rows:
-                errors.append(
-                    self._err(
-                        type="regex_violation",
-                        block=block,
-                        frame=frame,
-                        category=category,
-                        item=item,
-                        column=item,
-                        rows=bad_rows,
-                    )
+                self._err(
+                    type="regex_violation",
+                    item=item_name,
+                    column=item_name,
+                    rows=bad_rows,
                 )
+        return None
 
-            # -----------------------------------------------------------------
-            # Step 3: Case normalization for "uchar"
-            # -----------------------------------------------------------------
-            if type_prim == "uchar" and case_normalization is not None:
-                df = df.with_columns(
-                    (col.str.to_lowercase() if case_normalization == "lower" else col.str.to_uppercase()).alias(item)
-                )
-                col = pl.col(item).cast(pl.Utf8, strict=False)
+    def _table_uchar_normalization(self, table: pl.DataFrame) -> pl.DataFrame:
+        """Apply case normalization to "uchar" columns in an mmCIF category table.
 
-            # -----------------------------------------------------------------
-            # Step 4: Cast via caster -> produce temp columns (unique per (item,out))
-            # -----------------------------------------------------------------
-            plans = caster(col, type_code)
-            if not isinstance(plans, list) or not plans:
-                raise TypeError(f"caster must return a non-empty list[CastPlan] for item {item!r}")
+        Parameters
+        ----------
+        table
+            mmCIF category table as a Polars DataFrame.
+            Each column corresponds to a data item,
+            and all values are strings or nulls.
+            Strings represent parsed mmCIF values,
+            i.e., with no surrounding quotes.
+        item_defs
+            Dictionary of data item definitions for the category.
+            Keys are data item keywords (column names),
+            and values are dictionaries with the following key-value pairs:
+            - "type_primitive" (string): Primitive type of the data item.
+            One of: "char", "uchar", "numb".
+        case_normalization
+            Case normalization for "uchar" (case-insensitive character) data items.
+            If "lower", all values are converted to lowercase.
+            If "upper", all values are converted to uppercase.
 
-            # Normalize enum values (per item) if needed.
-            enum_vals_norm: list[str] | None = None
-            bool_like = False
-            allowed_ci: set[str] | None = None
+        Returns
+        -------
+        updated_table
+            Updated mmCIF category table as a Polars DataFrame,
+            with case normalization applied to "uchar" columns.
+        """
+        transforms: list[pl.Expr] = []
+        for item_name, item_def in self._curr_item_defs.items():
+            if item_def["type_primitive"] != "uchar":
+                continue
+            col = pl.col(item_name)
+            transform = (
+                col.str.to_lowercase() if self._uchar_case_normalization == "lower" else col.str.to_uppercase()
+            ).alias(item_name)
+            transforms.append(transform)
 
-            if enum:
-                if not isinstance(enum, list) or not all(isinstance(v, str) for v in enum):
-                    raise TypeError(f'item_defs[{item!r}]["enum"] must be list[str] or None')
-                enum_vals_norm = list(enum)
-                if type_prim == "uchar" and case_normalization is not None:
-                    enum_vals_norm = _normalize_vals(enum_vals_norm, case_normalization)
+        return table.with_columns(transforms)
 
-                enum_ci = {v.lower() for v in enum_vals_norm}
-                bool_like = enum_to_bool and len(enum_ci) > 0 and enum_ci.issubset(true_ci | false_ci)
-                allowed_ci = enum_ci if bool_like else None
-
-            if ranges is not None and not isinstance(ranges, list):
-                raise TypeError(f'item_defs[{item!r}]["range"] must be list[...] or None')
-
-            # Produce per-item temp columns
-            outs_seen: set[str] = set()
-            tmp_exprs: list[pl.Expr] = []
-            produced_entries: list[Produced] = []
-
-            for p in plans:
-                out = item if p.suffix == "" else f"{item}{p.suffix}"
-                if out in outs_seen:
-                    raise ValueError(f"caster produced duplicate output name {out!r} for item {item!r}")
-                outs_seen.add(out)
-
-                tmp_name = f"{TMP_PREFIX}{item}__{out}"
-                tmp_exprs.append(p.expr.alias(tmp_name))
-
-                produced_entries.append(
-                    Produced(
-                        item=item,
-                        out=out,
-                        tmp=tmp_name,
-                        plan=p,
-                        type_primitive=type_prim,
+    def _table_cast(self, table: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, list[ProducedColumn]]]:
+        outs_seen: set[str] = set()
+        exprs: list[pl.Expr] = []
+        produced_entries: dict[str, list[ProducedColumn]] = {}
+        for item_name, item_def in self._curr_item_defs.items():
+            type_code = item_def["type"]
+            col = pl.col(item_name)
+            plans = self._caster(col, type_code)
+            produced = produced_entries[item_name] = []
+            for plan in plans:
+                output_col_name = f"{item_name}{plan.suffix}"
+                if output_col_name in outs_seen:
+                    raise ValueError(f"caster produced duplicate output name {output_col_name!r} for item {item_name!r}")
+                outs_seen.add(output_col_name)
+                exprs.append(plan.expr.alias(output_col_name))
+                produced.append(
+                    ProducedColumn(
+                        input_name=item_name,
+                        output_name=output_col_name,
+                        plan=plan,
                         type_code=type_code,
-                        enum_vals_norm=enum_vals_norm,
-                        ranges=ranges,
                     )
                 )
 
-            df = df.with_columns(tmp_exprs)
+        df = table.with_columns(exprs).select(outs_seen)
+        return df, produced_entries
 
-            # -----------------------------------------------------------------
-            # Step 5: Enum validation + conversion (only on "main" outputs)
-            # -----------------------------------------------------------------
-            if enum_vals_norm is not None:
-                for prod in produced_entries:
-                    if not prod.plan.main:
-                        continue
+    def _table_enum(self, table: pl.DataFrame, produced_columns: dict[str, list[ProducedColumn]]) -> pl.DataFrame:
+        exprs: list[pl.Expr] = []
 
-                    tmp_col = pl.col(prod.tmp)
-                    plan = prod.plan
-
-                    if bool_like:
-                        # Validate membership in the (case-insensitive) allowed set.
-                        assert allowed_ci is not None
-
-                        def pred(el: pl.Expr) -> pl.Expr:
-                            n = _leaf_nullish_for_validation(el, plan)
-                            return (~n) & (~el.str.to_lowercase().is_in(list(allowed_ci)))
-
-                        viol = _any_violation(tmp_col, plan, pred)
-                        viol_rows = _collect_rows(viol)
-                        if viol_rows:
-                            errors.append(
-                                self._err(
-                                    type="enum_violation",
-                                    block=block,
-                                    frame=frame,
-                                    category=category,
-                                    item=item,
-                                    column=prod.out,
-                                    rows=viol_rows,
-                                )
-                            )
-                        else:
-                            # Convert leaves to boolean (case-insensitive).
-                            def mapper(el: pl.Expr) -> pl.Expr:
-                                n = _leaf_nullish_for_validation(el, plan)
-                                ci = el.str.to_lowercase()
-                                mapped = (
-                                    pl.when(ci.is_in(list(true_ci))).then(pl.lit(True))
-                                    .when(ci.is_in(list(false_ci))).then(pl.lit(False))
-                                    .otherwise(pl.lit(None))
-                                )
-                                return pl.when(n).then(pl.lit(None)).otherwise(mapped)
-
-                            df = df.with_columns(_map_leaves(tmp_col, plan, mapper).alias(prod.tmp))
-
-                    else:
-                        # Enum values are strings => leaf must be "str".
-                        if plan.dtype != "str":
-                            raise TypeError(
-                                f"Enum specified for item {item!r}, but main produced column {prod.out!r} "
-                                f"has leaf dtype {plan.dtype!r}"
-                            )
-
-                        enum_dtype = pl.Enum(enum_vals_norm)
-
-                        def pred(el: pl.Expr) -> pl.Expr:
-                            n = _leaf_nullish_for_validation(el, plan)
-                            return (~n) & (~el.is_in(enum_vals_norm))
-
-                        viol = _any_violation(tmp_col, plan, pred)
-                        viol_rows = _collect_rows(viol)
-                        if viol_rows:
-                            errors.append(
-                                self._err(
-                                    type="enum_violation",
-                                    block=block,
-                                    frame=frame,
-                                    category=category,
-                                    item=item,
-                                    column=prod.out,
-                                    rows=viol_rows,
-                                )
-                            )
-                        else:
-                            # Convert leaves to Enum while preserving nullish leaves.
-                            def mapper(el: pl.Expr) -> pl.Expr:
-                                n = _leaf_nullish_for_validation(el, plan)
-                                return pl.when(n).then(el).otherwise(el.cast(enum_dtype))
-
-                            df = df.with_columns(_map_leaves(tmp_col, plan, mapper).alias(prod.tmp))
-
-            # -----------------------------------------------------------------
-            # Step 6: Range validation (only on numeric items; only on "main" outputs)
-            # -----------------------------------------------------------------
-            if ranges is not None:
-                if type_prim != "numb":
-                    raise TypeError(
-                        f"Range specified for non-numeric item {item!r} (type_primitive={type_prim!r})"
-                    )
-
-                for prod in produced_entries:
-                    if not prod.plan.main:
-                        continue
-
-                    plan = prod.plan
-                    if plan.dtype not in ("float", "int"):
-                        raise TypeError(
-                            f"Range specified for item {item!r}, but produced column {prod.out!r} "
-                            f"has leaf dtype {plan.dtype!r}"
-                        )
-
-                    tmp_col = pl.col(prod.tmp)
-
-                    def pred(el: pl.Expr) -> pl.Expr:
-                        n = _leaf_nullish_for_validation(el, plan)
-                        return (~n) & (~_allowed_by_ranges(el, ranges))
-
-                    viol = _any_violation(tmp_col, plan, pred)
-                    viol_rows = _collect_rows(viol)
-                    if viol_rows:
-                        errors.append(
-                            self._err(
-                                type="range_violation",
-                                block=block,
-                                frame=frame,
-                                category=category,
-                                item=item,
-                                column=prod.out,
-                                rows=viol_rows,
-                            )
-                        )
-
-            # Record all produced temp columns for this input item
-            for prod in produced_entries:
-                produced_by_name.setdefault(prod.out, []).append(prod)
-
-        # ---------------------------------------------------------------------
-        # Step 7: Final replacement / merging
-        #
-        # Model:
-        # - Every input item contributes one or more produced columns (temp).
-        # - Group by output name:
-        #     * unique output name: direct
-        #     * repeated output name: merge with Step 7 semantics
-        #
-        # Critical detail:
-        # - For repeated names, the "casted original" column should take precedence when non-nullish.
-        #   We implement this by ordering producers so that (item == out) comes first.
-        # ---------------------------------------------------------------------
-        final_outs = set(produced_by_name.keys())
-        out_exprs: list[pl.Expr] = []
-
-        for out, prods in produced_by_name.items():
-            # Prefer the producer that casts the original column itself (item == out),
-            # so that "original non-nullish" overrides other produced values.
-            prods_sorted = sorted(prods, key=lambda p: (p.item != out))
-
-            if len(prods_sorted) == 1:
-                out_exprs.append(pl.col(prods_sorted[0].tmp).alias(out))
+        for item_name, item_def in self._curr_item_defs.items():
+            enum = list(item_def.get("enumeration", {}).keys())
+            if not enum:
                 continue
 
-            # Enforce merge compatibility: dtype + container must match across producers.
-            first = prods_sorted[0]
-            for p in prods_sorted[1:]:
-                if (p.plan.dtype, p.plan.container) != (first.plan.dtype, first.plan.container):
+            type_prim = item_def["type_primitive"]
+            # Normalize enum values (per item) if needed.
+            enum_vals_norm: list[str] = (
+                enum
+                if type_prim != "uchar" or not self._uchar_case_normalization
+                else _normalize_vals(enum, self._uchar_case_normalization)
+            )
+
+            enum_vals_lower = {v.lower() for v in enum_vals_norm}
+            bool_like: bool = self._enum_to_bool and enum_vals_lower.issubset(self._enum_bool)
+
+            for produced_column in produced_columns[item_name]:
+                plan = produced_column.plan
+
+                # Only string or int allowed
+                if plan.dtype not in ("str", "int"):
                     raise TypeError(
-                        f"Cannot merge repeated output column {out!r}: incompatible dtype/container "
-                        f"{(first.plan.dtype, first.plan.container)} vs {(p.plan.dtype, p.plan.container)}"
+                        f"Enum specified for item {item_name!r}, but main produced column {produced_column.output_name!r} "
+                        f"has leaf dtype {plan.dtype!r}"
                     )
 
-            # Mismatch attribution: if there's a "self" producer, attribute lookups to that item name; else first producer.
-            mismatch_item = out if any(p.item == out for p in prods_sorted) else first.item
+                # Skip auxiliary columns
+                if not produced_column.plan.main:
+                    continue
 
-            # Fold merge left-to-right:
-            # - If current merged value is null/NaN => take next
-            # - Else if next is non-nullish and differs => record auxiliary_mismatch
-            merged = pl.col(first.tmp)
-            merged_nullish = _row_nullish_for_merge(merged, first.plan)
+                tmp_col = pl.col(produced_column.output_name)
 
-            for nxt in prods_sorted[1:]:
-                nxt_col = pl.col(nxt.tmp)
-                nxt_nullish = _row_nullish_for_merge(nxt_col, nxt.plan)
+                def pred(el: pl.Expr) -> pl.Expr:
+                    n = _leaf_nullish_for_validation(el, plan)
+                    return (~n) & (~el.cast(pl.Utf8).is_in(enum_vals_norm))
 
-                # Detect discrepancies where both are present.
-                if first.plan.dtype == "float" and first.plan.container is None:
-                    both_nan = merged.is_nan() & nxt_col.is_nan()
-                    equal = (merged == nxt_col) | both_nan
-                else:
-                    equal = merged == nxt_col
+                viol = _any_violation(tmp_col, plan, pred)
+                viol_rows = _collect_rows(table, viol)
+                if viol_rows:
+                    self._err(
+                        type="enum_violation",
+                        item=item_name,
+                        column=produced_column.output_name,
+                        rows=viol_rows,
+                    )
+                    continue
 
-                mismatch = (~merged_nullish) & (~nxt_nullish) & (~equal)
-                mismatch_rows = _collect_rows(mismatch)
-                if mismatch_rows:
-                    errors.append(
-                        self._err(
-                            type="auxiliary_mismatch",
-                            block=block,
-                            frame=frame,
-                            category=category,
-                            item=mismatch_item,
-                            column=out,
-                            rows=mismatch_rows,
+                if bool_like:
+                    # Convert leaves to boolean (case-insensitive).
+                    def mapper(el: pl.Expr) -> pl.Expr:
+                        ci = el.cast(str).str.to_lowercase()
+                        return (
+                            pl
+                            .when(ci.is_in(list(self._enum_true))).then(pl.lit(True))
+                            .when(ci.is_in(list(self._enum_false))).then(pl.lit(False))
+                            .otherwise(pl.lit(None))
                         )
+                else:
+                    enum_dtype = pl.Enum(enum_vals_norm + [""])
+                    # Convert leaves to Enum while preserving nullish leaves.
+                    def mapper(el: pl.Expr) -> pl.Expr:
+                        return el.cast(str).cast(enum_dtype)
+
+                new_col = _map_leaves(tmp_col, plan, mapper).alias(produced_column.output_name)
+                exprs.append(new_col)
+
+        df = table.with_columns(exprs) if exprs else table
+        return df
+
+    def _table_ranges(self, table: pl.DataFrame, produced_columns: dict[str, list[ProducedColumn]]) -> None:
+
+        for item_name, item_def in self._curr_item_defs.items():
+            ranges = item_def.get("range")
+            if ranges is None:
+                continue
+
+            type_prim = item_def["type_primitive"]
+
+            if type_prim != "numb":
+                raise TypeError(
+                    f"Range specified for non-numeric item {item_name!r} (type_primitive={type_prim!r})"
+                )
+
+            for produced_column in produced_columns[item_name]:
+                if not produced_column.plan.main:
+                    continue
+
+                plan = produced_column.plan
+                if plan.dtype not in ("float", "int"):
+                    raise TypeError(
+                        f"Range specified for item {item_name!r}, but produced column {produced_column.output_name!r} "
+                        f"has leaf dtype {plan.dtype!r}"
                     )
 
-                # Merge rule: fill missing (nullish) values from nxt, otherwise keep current.
-                merged = pl.when(merged_nullish).then(nxt_col).otherwise(merged)
-                merged_nullish = _row_nullish_for_merge(merged, first.plan)
+                tmp_col = pl.col(produced_column.output_name)
 
-            out_exprs.append(merged.alias(out))
+                def pred(el: pl.Expr) -> pl.Expr:
+                    n = _leaf_nullish_for_validation(el, plan)
+                    return (~n) & (~_allowed_by_ranges(el, ranges))
 
-        # Materialize all final outputs
-        df = df.with_columns(out_exprs)
+                viol = _any_violation(tmp_col, plan, pred)
+                viol_rows = _collect_rows(table, viol)
+                if viol_rows:
+                    self._err(
+                        type="range_violation",
+                        item=item_name,
+                        column=produced_column.output_name,
+                        rows=viol_rows,
+                    )
+        return
 
-        # Drop all temp columns
-        tmp_cols = [c for c in df.columns if c.startswith(TMP_PREFIX)]
-        if tmp_cols:
-            df = df.drop(tmp_cols)
-
-        # Drop processed raw input columns that are not in the final outputs.
-        # (If a processed item is not produced with suffix "", it gets removed.)
-        drop_cols = [c for c in processed_items if c in df.columns and c not in final_outs]
-        if drop_cols:
-            df = df.drop(drop_cols)
-
-        return df, errors
-
-    @staticmethod
     def _err(
+        self,
         type: Literal[
             "undefined_category",
             "undefined_item",
@@ -869,23 +667,23 @@ class DDL2Validator(CIFFileValidator):
             "range_violation",
             "auxiliary_mismatch",
         ],
-        block: str | None = None,
-        frame: str | None = None,
-        category: str | None = None,
+        *,
         item: str | None = None,
         column: str | None = None,
         rows: list[int] | None = None,
-    ) -> dict[str, Any]:
+    ) -> None:
         """Create an error dictionary."""
-        return {
+        err = {
             "type": type,
-            "block": block,
-            "frame": frame,
-            "category": category,
+            "block": self._curr_block_code,
+            "frame": self._curr_frame_code,
+            "category": self._curr_category_code,
             "item": item,
             "column": column,
             "rows": rows,
         }
+        self._errs.append(err)
+        return
 
 
 def _normalize_for_rust_regex(regex: str) -> str:
@@ -909,3 +707,109 @@ def _normalize_for_rust_regex(regex: str) -> str:
     # Escape them here.
     regex = regex.replace(r"[][", r"[\]\[")
     return regex
+
+
+@dataclass(frozen=True)
+class ProducedColumn:
+    """One produced column emitted by one caster for one input item."""
+    input_name: str
+    output_name: str
+    plan: CastPlan
+    type_code: str
+
+
+def _collect_rows(df: pl.DataFrame, mask: pl.Expr) -> list[int]:
+    # Eager: returns row indices where mask is True.
+    return df.select(pl.arg_where(mask)).to_series(0).to_list()
+
+
+def _normalize_vals(
+    vals: Sequence[str],
+    mode: Literal["lower", "upper"]
+) -> list[str]:
+    return [v.lower() for v in vals] if mode == "lower" else [v.upper() for v in vals]
+
+
+def _leaf_nullish_for_validation(el: pl.Expr, plan: Any) -> pl.Expr:
+    """
+    Nullish markers (to be ignored) for enum/range validation, at the LEAF level.
+
+    Per spec:
+    - float: null or NaN
+    - str: null or empty string
+    - int/bool/date: null
+    """
+    if plan.dtype == "float":
+        return el.is_null() | el.is_nan()
+    if plan.dtype == "str":
+        return el.is_null() | (el == pl.lit(""))
+    return el.is_null()
+
+
+def _any_violation(
+    col: pl.Expr,
+    plan: Any,
+    pred_leaf: Callable[[pl.Expr], pl.Expr]
+) -> pl.Expr:
+    """
+    Per-row boolean: True if ANY innermost leaf element violates pred_leaf.
+    Container semantics (as agreed):
+    - None: scalar
+    - list: validate elements
+    - array: validate all array elements
+    - array_list: validate all elements in each array in the list
+    """
+    if plan.container is None:
+        return pred_leaf(col)
+    if plan.container == "list":
+        return col.list.eval(pred_leaf(pl.element())).list.any()
+    if plan.container == "array":
+        return col.arr.eval(pred_leaf(pl.element())).arr.any()
+    if plan.container == "array_list":
+        return col.list.eval(
+            pl.element().arr.eval(pred_leaf(pl.element())).arr.any()
+        ).list.any()
+    raise ValueError(f"Unsupported container: {plan.container!r}")
+
+
+def _map_leaves(
+    col: pl.Expr,
+    plan: Any,
+    mapper: Callable[[pl.Expr], pl.Expr]
+) -> pl.Expr:
+    """
+    Apply `mapper` to each innermost leaf element, preserving container structure.
+    """
+    if plan.container is None:
+        return mapper(col)
+    if plan.container == "list":
+        return col.list.eval(mapper(pl.element()))
+    if plan.container == "array":
+        return col.arr.eval(mapper(pl.element()))
+    if plan.container == "array_list":
+        return col.list.eval(pl.element().arr.eval(mapper(pl.element())))
+    raise ValueError(f"Unsupported container: {plan.container!r}")
+
+
+def _allowed_by_ranges(
+    el: pl.Expr,
+    ranges: list[tuple[float | None, float | None]]
+) -> pl.Expr:
+    """
+    Leaf predicate: True if `el` lies in the union of the specified ranges.
+    Ranges are exclusive bounds, except lo==hi means exact match.
+    """
+    allowed: pl.Expr | None = None
+    for lo, hi in ranges:
+        if lo is None and hi is None:
+            ok = pl.lit(True)
+        elif lo is not None and hi is not None and lo == hi:
+            ok = el == pl.lit(lo)
+        else:
+            ok = pl.lit(True)
+            if lo is not None:
+                ok = ok & (el > pl.lit(lo))
+            if hi is not None:
+                ok = ok & (el < pl.lit(hi))
+        allowed = ok if allowed is None else (allowed | ok)
+    return allowed if allowed is not None else pl.lit(True)
