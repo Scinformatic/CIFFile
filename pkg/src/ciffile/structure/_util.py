@@ -136,11 +136,12 @@ def dataframe_to_dict(
         if n_multi > 0:
             warnings.warn(
                 (
-                    f"{n_multi} ID group(s) contain multiple rows{f' in DataFrame {df_name!r}' if df_name else ''}; "
-                    f"using multi_row={multi_row!r} drops rows."
-                    f"IDs of affected groups include: {', '.join(f"'{multi.select(pl.col(c)).row(0)[0]}'" for c in id_cols)}"
+                    f"DataFrame{f' {df_name!r}' if df_name else ''} contains multiple rows "
+                    f"in {n_multi} ID {'group' if n_multi == 1 else 'groups'}: "
+                    f"{', '.join(f"'{multi.select(pl.col(c)).row(0)[0]}'" for c in id_cols)}"
+                    f". Only the {multi_row} row is kept in each group."
                 ),
-                RuntimeWarning,
+                UserWarning,
                 stacklevel=2,
             )
 
