@@ -17,9 +17,9 @@ namespaces = true
 # ----------------------------------------- Project Metadata -------------------------------------
 #
 [project]
-version = "0.0.0"
+version = "0.1.0"
 name = "CIFFile"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "polars >=1",
     "FileEx >=0.2.7,<0.3",
