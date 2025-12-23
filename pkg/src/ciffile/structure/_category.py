@@ -29,6 +29,7 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
             content=content,
             variant=variant,
         )
+        self._df = self._df.select(sorted(self._df.columns))
         self._col_block = col_name_block
         self._col_frame = col_name_frame
 
@@ -41,6 +42,16 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
     @CIFStructureWithItem.df.setter
     def df(self, new_df: pl.DataFrame) -> None:
         """Re-set the underlying DataFrame for this data category."""
+        cols = []
+        if self._col_block is not None:
+            cols.append(self._col_block)
+        if self._col_frame is not None:
+            cols.append(self._col_frame)
+        if self.keys is not None:
+            cols.extend(sorted(self.keys))
+        remaining_cols = sorted([col for col in new_df.columns if col not in cols])
+        all_cols = cols + remaining_cols
+        new_df = new_df.select(all_cols)
         self._df = new_df
         self.refresh()
         return
@@ -80,7 +91,14 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
     @keys.setter
     def keys(self, keys: list[str] | None) -> None:
         """Set the data item codes (column names) corresponding to category keys."""
+        for key in keys or []:
+            if key not in self.codes:
+                raise ValueError(f"Key {key!r} not found in category {self._code!r} codes.")
+        df = self._df
+        if keys:
+            df = df.sort(by=keys, nulls_last=True)
         self._keys = keys
+        self.df = df  # re-set to update column order
         return
 
     @property
