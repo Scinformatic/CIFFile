@@ -1,4 +1,10 @@
-"""CIF file validator."""
+"""DDL2 CIF file validator.
+
+References
+----------
+- [DDL Specification](https://www.iucr.org/resources/cif/spec/ddl)
+- [DDL2 Specification](https://www.iucr.org/resources/cif/ddl/ddl2)
+"""
 
 from __future__ import annotations
 
