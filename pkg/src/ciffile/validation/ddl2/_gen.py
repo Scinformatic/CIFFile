@@ -209,7 +209,14 @@ class DDL2Generator:
                 "description": nws(category["description"].value),
                 "mandatory": category["mandatory_code"].value.lower() == "yes",
                 "groups": cat.get("category_group").get("id").values.to_list(),
-                "keys": cat.get("category_key").get("name").values.to_list(),
+                "keys": (
+                    cat.get("category_key").get("name").values
+                    .cast(pl.Utf8)
+                    .str.to_lowercase()
+                    .str.splitn(".", 2)
+                    .struct.field("field_1")
+                    .to_list()
+                ),
             }
         return out
 
@@ -229,7 +236,7 @@ class DDL2Generator:
             item_self, item_others = self._normalize_item_df(item_frame["item"].df, frame_code=item_frame.code)
 
             item_dict = {
-                "category": item_self["category_id"],
+                "category": item_self["category_id"].lower(),
                 "mandatory": item_self["mandatory_code"] == "yes",
                 "others": item_others
             }
@@ -265,7 +272,7 @@ class DDL2Generator:
 
             for row in other_items_df.iter_rows(named=True):
                 extra = {
-                    "category": row["category_id"],
+                    "category": row["category_id"].lower(),
                     "mandatory": row["mandatory_code"] == "yes",
                 }
                 other_item = items.setdefault(row["name"], {})
