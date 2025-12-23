@@ -94,18 +94,14 @@ class DDL2Generator:
         required_cols = {"id", "description", "parent_id"}
 
         if key not in self._dict:
-            warnings.warn(
-                "DDL2Generator: Dictionary missing category_group_list.",
-                stacklevel=2,
-            )
+            self._warn("Dictionary missing category_group_list.")
             return {}
 
         df = self._dict[key].df
         missing_cols = required_cols - set(df.columns)
         if missing_cols:
-            warnings.warn(
-                f"DDL2Generator: category_group_list missing columns: {', '.join(missing_cols)}.",
-                stacklevel=2,
+            self._warn(
+                f"category_group_list missing columns: {', '.join(missing_cols)}."
             )
             return {}
 
@@ -136,18 +132,16 @@ class DDL2Generator:
         required_cols = {"code", "primitive_code", "construct", "detail"}
 
         if key not in self._dict:
-            warnings.warn(
-                "DDL2Generator: Dictionary missing item_type_list.",
-                stacklevel=2,
+            self._warn(
+                "Dictionary missing item_type_list."
             )
             return {}
 
         df = self._dict[key].df
         missing_cols = required_cols - set(df.columns)
         if missing_cols:
-            warnings.warn(
-                f"DDL2Generator: item_type_list missing columns: {', '.join(missing_cols)}.",
-                stacklevel=2,
+            self._warn(
+                f"item_type_list missing columns: {', '.join(missing_cols)}."
             )
             return {}
 
@@ -175,18 +169,16 @@ class DDL2Generator:
         required_cols = {"id", "description"}
 
         if key not in self._dict:
-            warnings.warn(
-                "DDL2Generator: Dictionary missing sub_category.",
-                stacklevel=2,
+            self._warn(
+                "Dictionary missing sub_category."
             )
             return {}
 
         df = self._dict[key].df
         missing_cols = required_cols - set(df.columns)
         if missing_cols:
-            warnings.warn(
-                f"DDL2Generator: sub_category missing columns: {', '.join(missing_cols)}.",
-                stacklevel=2,
+            self._warn(
+                f"sub_category missing columns: {', '.join(missing_cols)}."
             )
             return {}
 
@@ -223,6 +215,7 @@ class DDL2Generator:
     def _gen_item(self) -> dict[str, dict]:
         """Generate data for data items in a category."""
         out_item = {}
+        item_name_frame_contributors: dict[str, set[str]] = {}
         for item_frame in self._keydict.frames:
 
             if "item" not in item_frame:
@@ -245,10 +238,16 @@ class DDL2Generator:
                 if key in item_frame:
                     item_dict[key.removeprefix("item_")] = gen_func(item_frame[key], frame_code=item_frame.code)
 
-            out_item[item_self["name"]] = item_dict
-        return self._fill_items(out_item)
+            item_name = item_self["name"]
+            out_item[item_name] = item_dict
+            item_name_frame_contributors.setdefault(item_name, set()).add(item_frame.code)
+        return self._fill_items(out_item, item_name_frame_contributors)
 
-    def _fill_items(self, items: dict[str, dict]) -> dict[str, dict]:
+    def _fill_items(
+        self,
+        items: dict[str, dict],
+        item_name_frame_contributors: dict[str, set[str]],
+    ) -> dict[str, dict]:
         """Generate data for data items in a category."""
         def update(add_from: dict, add_to: dict, add_to_name: str, add_extra: dict | None = None) -> None:
             self._update_item_definition(
@@ -263,8 +262,6 @@ class DDL2Generator:
                     add_from[key] = value_to
             item_name_frame_contributors.setdefault(add_to_name, set()).add(item_name)
             return
-
-        item_name_frame_contributors: dict[str, set[str]] = {}
 
         for item_name, item in items.items():
 
@@ -281,7 +278,7 @@ class DDL2Generator:
             if "linked" in item:
                 linked_names = item["linked"]
                 added_names = {item_name} | set(other_items_df["name"].to_list())
-                remaining_names = linked_names - added_names
+                remaining_names = set(linked_names) - added_names
                 for name in remaining_names:
                     out_item_linked = items.setdefault(name, {})
                     update(item, out_item_linked, name)
@@ -289,10 +286,7 @@ class DDL2Generator:
         return items
 
     def _warn(self, message: str) -> None:
-        warnings.warn(
-            f"DDL2Generator: {message}",
-            stacklevel=2,
-        )
+        warnings.warn(message, stacklevel=3)
         return
 
     def _normalize_item_df(self, df: pl.DataFrame, frame_code: str) -> tuple[dict, pl.DataFrame]:
@@ -393,35 +387,12 @@ class DDL2Generator:
             if key == "mandatory":
                 continue
             self._warn(
-                f"Conflicting definitions for data item '{add_to_name}', "
-                f"while adding definition from '{add_from_name}'. "
-                f"The conflict is in key '{key}'; '{add_from_name}' defines '{value_from!r}', "
-                f"while existing definition is '{value_to!r}'.\n"
-                f"Other contributors to '{add_to_name} include:\n{', '.join(contributors.get(add_to_name, set()))}. "
+                f"Conflicting definitions in '{key}' of data item '{add_to_name}' "
+                f"while adding definitions from data item '{add_from_name}':\n"
+                f"'{add_from_name}' defines: '{value_from!r}'\n"
+                f"Existing definition is '{value_to!r}'\n"
+                f"Other contributors to '{add_to_name}' are: {', '.join(f"'{c}'" for c in contributors.get(add_to_name, []))}"
             )
-
-
-
-            # # Try to resolve conflicts for known keys
-            # if key == "enumeration":
-            #     if set(value_from.keys()) != set(value_to.keys()):
-            #         raise ValueError(
-            #             f"Conflicting enumeration key definitions for '{key}': "
-            #             f"From:\n{add_from!r}\nTo:\n{add_to!r}"
-            #         )
-            #     for enum_key, enum_value_from in value_from.items():
-            #         ennm_value_to = value_to[enum_key]
-            #         for enum_prop_key, enum_prop_value_from in enum_value_from.items():
-            #             if enum_prop_key not in ennm_value_to:
-            #                 ennm_value_to[enum_prop_key] = enum_prop_value_from
-            #                 continue
-            #             enum_prop_value_to = ennm_value_to[enum_prop_key]
-            #             if enum_prop_value_from == enum_prop_value_to:
-            #                 continue
-            #             if len(enum_prop_value_from) > len(enum_prop_value_to):
-            #                 ennm_value_to[enum_prop_key] = enum_prop_value_from
-            #     continue
-
         return
 
     def _gen_item_aliases(self, item: CIFDataCategory, frame_code: str) -> list[dict[str, str]]:
@@ -486,7 +457,7 @@ class DDL2Generator:
         return item["value"].values[0]
 
     @staticmethod
-    def _gen_item_linked(item: CIFDataCategory, frame_code: str) -> set[str]:
+    def _gen_item_linked(item: CIFDataCategory, frame_code: str) -> list[str]:
         for mandatory_keyword in {"child_name", "parent_name"}:
             if mandatory_keyword not in item:
                 raise ValueError(
@@ -496,7 +467,7 @@ class DDL2Generator:
             set(item[name].values.str.to_lowercase().str.strip_prefix("_").to_list())
             for name in ("child_name", "parent_name")
         )
-        return child_names | parent_names
+        return list(child_names | parent_names)
 
     @staticmethod
     def _gen_item_range(item: CIFDataCategory, frame_code: str) -> list[tuple[float | None, float | None]]:
