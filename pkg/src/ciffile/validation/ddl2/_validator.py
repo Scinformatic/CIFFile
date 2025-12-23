@@ -11,7 +11,6 @@ import polars as pl
 from .._base import CIFFileValidator
 from ._input_schema import DDL2Dictionary
 from ._caster import Caster, CastPlan
-from ._re import normalize_for_rust_regex
 
 if TYPE_CHECKING:
     from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
@@ -84,13 +83,9 @@ class DDL2Validator(CIFFileValidator):
 
             item_type = item["type"]
 
-            if enum_to_bool and "enumeration" in item and all(enum in bool_enums for enum in item["enumeration"].keys()):
-                item_type = item["type"] = "boolean"
-                item.pop("enumeration")
-
             item_type_info = dictionary["item_type"][item_type]
             item["type_primitive"] = item_type_info["primitive"]
-            item["type_regex"] = normalize_for_rust_regex(item_type_info["regex"]).pattern
+            item["type_regex"] = _normalize_for_rust_regex(item_type_info["regex"])
             item["type_detail"] = item_type_info.get("detail")
         return
 
@@ -390,11 +385,6 @@ class DDL2Validator(CIFFileValidator):
             Note that this step is performed after all columns have been processed,
             since otherwise we may be comparing one casted column against another non-casted raw column.
         """
-        if not isinstance(table, pl.DataFrame):
-            raise TypeError("table must be a polars.DataFrame")
-
-        if case_normalization not in ("lower", "upper", None):
-            raise ValueError("case_normalization must be 'lower', 'upper', or None")
 
         # Per spec: all values are strings or nulls.
         for name, dt in table.schema.items():
@@ -421,13 +411,6 @@ class DDL2Validator(CIFFileValidator):
 
         produced_by_name: dict[str, list[Produced]] = {}
         processed_items: set[str] = set()
-
-        # ---------------------------------------------------------------------
-        # 0.1) Small helpers (kept strict and dtype-safe)
-        # ---------------------------------------------------------------------
-        def _fullmatch(expr: pl.Expr, regex: str) -> pl.Expr:
-            # Full-match even if caller didn't anchor.
-            return expr.str.contains(f"^(?:{regex})$")
 
         def _collect_rows(mask: pl.Expr) -> list[int]:
             # Eager: returns row indices where mask is True.
@@ -528,26 +511,18 @@ class DDL2Validator(CIFFileValidator):
         # ---------------------------------------------------------------------
         for item, idef in item_defs.items():
             if item not in df.columns:
-                # Spec does not define missing input items as errors; ignore.
+                # Item not present in table; skip.
+                # Missing mandatory items are handled upstream.
                 continue
 
             processed_items.add(item)
 
             default = idef.get("default")
-            enum = idef.get("enum")
+            enum = list(idef.get("enumeration", {}).keys())
             ranges = idef.get("range")
-            type_code = idef.get("type")
-            type_prim = idef.get("type_primitive")
-            type_regex = idef.get("type_regex")
-
-            if not isinstance(type_code, str):
-                raise KeyError(f'item_defs[{item!r}] missing required key "type"')
-            if type_prim not in ("numb", "char", "uchar"):
-                raise ValueError(
-                    f'item_defs[{item!r}]["type_primitive"] must be "numb", "char", or "uchar"'
-                )
-            if not isinstance(type_regex, str):
-                raise KeyError(f'item_defs[{item!r}] missing required key "type_regex"')
+            type_code = idef["type"]
+            type_prim = idef["type_primitive"]
+            type_regex = idef["type_regex"]
 
             col = pl.col(item).cast(pl.Utf8, strict=False)
 
@@ -582,18 +557,21 @@ class DDL2Validator(CIFFileValidator):
             # -----------------------------------------------------------------
             # Step 2: Construct regex check (ignore null and ".")
             # -----------------------------------------------------------------
-            # check = col.is_not_null() & (col != pl.lit("."))
-            # construct_bad = check & (~_fullmatch(col, type_regex))
-            # bad_rows = _collect_rows(construct_bad)
-            # if bad_rows:
-            #     errors.append(
-            #         {
-            #             "item": item,
-            #             "column": item,
-            #             "row_indices": bad_rows,
-            #             "error_type": "construct_mismatch",
-            #         }
-            #     )
+            check = col.is_not_null() & (col != pl.lit("."))
+            construct_bad = check & (~col.str.contains(f"^(?:{type_regex})$"))
+            bad_rows = _collect_rows(construct_bad)
+            if bad_rows:
+                errors.append(
+                    self._err(
+                        type="regex_violation",
+                        block=block,
+                        frame=frame,
+                        category=category,
+                        item=item,
+                        column=item,
+                        rows=bad_rows,
+                    )
+                )
 
             # -----------------------------------------------------------------
             # Step 3: Case normalization for "uchar"
@@ -616,7 +594,7 @@ class DDL2Validator(CIFFileValidator):
             bool_like = False
             allowed_ci: set[str] | None = None
 
-            if enum is not None:
+            if enum:
                 if not isinstance(enum, list) or not all(isinstance(v, str) for v in enum):
                     raise TypeError(f'item_defs[{item!r}]["enum"] must be list[str] or None')
                 enum_vals_norm = list(enum)
@@ -886,6 +864,7 @@ class DDL2Validator(CIFFileValidator):
             "missing_category",
             "missing_item",
             "missing_value",
+            "regex_violation",
             "enum_violation",
             "range_violation",
             "auxiliary_mismatch",
@@ -907,3 +886,26 @@ class DDL2Validator(CIFFileValidator):
             "column": column,
             "rows": rows,
         }
+
+
+def _normalize_for_rust_regex(regex: str) -> str:
+    """Normalize a regex for use in Rust-based validation.
+
+    This function applies necessary transformations to ensure compatibility
+    with the Rust regex engine used in certain validation contexts.
+
+    Parameters
+    ----------
+    regex
+        The input regex string to be normalized.
+
+    Returns
+    -------
+    str
+        The normalized regex string.
+    """
+    # DDL2 regexes contain unescaped square brackets inside character classes,
+    # which are not supported by the Rust regex engine.
+    # Escape them here.
+    regex = regex.replace(r"[][", r"[\]\[")
+    return regex
