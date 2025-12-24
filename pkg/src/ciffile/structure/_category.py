@@ -43,9 +43,9 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
     def df(self, new_df: pl.DataFrame) -> None:
         """Re-set the underlying DataFrame for this data category."""
         cols = []
-        if self._col_block is not None:
+        if self._col_block is not None and self._col_block in new_df.columns:
             cols.append(self._col_block)
-        if self._col_frame is not None:
+        if self._col_frame is not None and self._col_frame in new_df.columns:
             cols.append(self._col_frame)
         if self.keys is not None:
             cols.extend(sorted(self.keys))
