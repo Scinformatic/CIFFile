@@ -18,6 +18,7 @@ def read(
     *,
     variant: Literal["cif1", "mmcif"] = "mmcif",
     encoding: str = "utf-8",
+    case_normalization: Literal["lower", "upper"] | None = "lower",
     raise_level: Literal[0, 1, 2] = 2,
     col_name_block: str = "block",
     col_name_frame: str = "frame",
@@ -79,7 +80,13 @@ def read(
     CIFFileReadError
         If parsing errors occur that meet or exceed the specified `raise_level`.
     """
-    columns, parsing_errors = parse(file=file, variant=variant, encoding=encoding, raise_level=raise_level)
+    columns, parsing_errors = parse(
+        file=file,
+        variant=variant,
+        encoding=encoding,
+        case_normalization=case_normalization,
+        raise_level=raise_level
+    )
     column_name_map = {
         "block": col_name_block,
         "frame": col_name_frame,
