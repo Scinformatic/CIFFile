@@ -475,7 +475,14 @@ def validate_content_df(
         if isinstance(obj, pl.LazyFrame):
             return obj.collect()
         try:
-            return pl.DataFrame(obj, strict=False)
+            schema = {
+                col_name_block: pl.Utf8,
+                col_name_frame: pl.Utf8,
+                col_name_cat: pl.Utf8,
+                col_name_key: pl.Utf8,
+                col_name_values: pl.List(pl.Utf8),
+            }
+            return pl.DataFrame(obj, schema_overrides=schema, strict=False)
         except Exception as e:  # pragma: no cover
             raise ValueError(f"Could not convert 'content' to a Polars DataFrame: {e}") from e
 
@@ -629,4 +636,5 @@ def validate_content_df(
         col for col in (col_name_block, col_name_frame, col_name_cat, col_name_key, col_name_values)
         if col is not None and col in df.columns
     ]
+
     return df.select(out_cols)
