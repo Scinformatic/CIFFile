@@ -267,7 +267,6 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-
         self._df = content if isinstance(content, pl.DataFrame) else pl.DataFrame(content, strict=False)
         self._variant: Literal["cif1", "mmcif"] = variant
 
@@ -663,6 +662,7 @@ class CIFStructureWithCategory(CIFStructureWithItem[ElementType]):
                 col_name_key=col_name_key,
                 col_name_values=col_name_values,
             )
+
         super().__init__(content=content, **kwargs)
         if col_name_frame in self.df.columns:
             if self.df.select(pl.col(col_name_frame).is_null().all()).item():
