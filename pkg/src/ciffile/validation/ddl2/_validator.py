@@ -130,7 +130,7 @@ class DDL2Validator(CIFFileValidator):
         self._errs = []
 
         if file.container_type == "category":
-            return pl.DataFrame(validate_category(file))
+            return pl.DataFrame(self._validate_category(file))
 
         blocks: list[CIFBlock] = [file] if file.container_type == "block" else file
         for block in blocks:
@@ -537,7 +537,7 @@ class DDL2Validator(CIFFileValidator):
                     )
                 )
 
-        df = table.with_columns(exprs).select(outs_seen)
+        df = table.with_columns(exprs)
         return df, produced_entries
 
     def _table_enum(self, table: pl.DataFrame, produced_columns: dict[str, list[ProducedColumn]]) -> pl.DataFrame:
