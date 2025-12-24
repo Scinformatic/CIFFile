@@ -68,6 +68,7 @@ from collections.abc import Iterator, Callable
 from typing import NamedTuple, Literal
 
 from fileex.file import content as filelike_to_str
+from tqdm.auto import tqdm
 
 from ciffile.typing import FileLike
 from ._exception import CIFFileParseError, CIFFileParseErrorType
@@ -234,7 +235,11 @@ class CIFParser:
         NOOP = lambda: None
 
         # Loop over tokens
-        for self._curr_token_idx, self._curr_match in enumerate(self._tokenizer):
+        for self._curr_token_idx, self._curr_match in tqdm(
+                enumerate(self._tokenizer),
+                desc=f"Parsing CIF",
+                unit="tokens"
+            ):
             self._curr_token_type = Token(self._curr_match.lastindex)
             self._curr_token_value = self._curr_match.group(self._curr_match.lastindex)
 
