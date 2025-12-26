@@ -94,7 +94,6 @@ class Caster:
         bool_false: Sequence[str] = ("NO",),
         bool_strip: bool = True,
         bool_case_insensitive: bool = True,
-        datetime_output: Literal["auto", "date", "datetime"] = "auto",
         datetime_time_zone: str | None = None,
     ) -> None:
         self._esd_col_suffix = esd_col_suffix
@@ -105,7 +104,6 @@ class Caster:
         self._bool_falsey = bool_false
         self._bool_strip = bool_strip
         self._bool_case_insensitive = bool_case_insensitive
-        self._datetime_output = datetime_output
         self._datetime_time_zone = datetime_time_zone
 
         self._type_to_caster = {
@@ -224,7 +222,7 @@ class Caster:
         return [CastPlan(expr=expr, dtype="bool")]
 
     def date_dep(self, expr: pl.Expr) -> list[CastPlan]:
-        expr = self._datetime(expr)
+        expr = self._datetime(expr, "date")
         return [CastPlan(expr=expr, dtype="date")]
 
     def entity_id_list(self, expr: pl.Expr) -> list[CastPlan]:
@@ -523,18 +521,18 @@ class Caster:
         return [CastPlan(expr=expr, dtype="str", container="list")]
 
     def yyyy_mm_dd(self, expr: pl.Expr) -> list[CastPlan]:
-        expr = self._datetime(expr)
+        expr = self._datetime(expr, "date")
         return [CastPlan(expr=expr, dtype="date")]
 
     def yyyy_mm_dd_hh_mm(self, expr: pl.Expr) -> list[CastPlan]:
-        expr = self._datetime(expr)
+        expr = self._datetime(expr, "datetime")
         return [CastPlan(expr=expr, dtype="date")]
 
     def yyyy_mm_dd_hh_mm_flex(self, expr: pl.Expr) -> list[CastPlan]:
-        expr = self._datetime(expr)
+        expr = self._datetime(expr, "datetime")
         return [CastPlan(expr=expr, dtype="date")]
 
-    def _datetime(self, expr: pl.Expr) -> pl.Expr:
+    def _datetime(self, expr: pl.Expr, output: Literal["date", "datetime"] = "datetime") -> pl.Expr:
         """Parse partial date/datetime strings into Polars Date/Datetime.
 
         Parameters
@@ -546,7 +544,7 @@ class Caster:
             The actual accepted shape is:
 
             ```
-            y{2,3}[-m{1,2}[-d{1,2}]][:h{1,2}[:min{1,2}]]
+            y{2,4}[-m{1,2}[-d{1,2}]][:h{1,2}[:min{1,2}]]
             ```
 
             Year normalization rules are:
@@ -576,13 +574,13 @@ class Caster:
         """
         # Regex matching the full allowed grammar.
         # Capture groups:
-        #   1 = year (2–3 digits)
+        #   1 = year (2–4 digits)
         #   2 = month (1–2 digits, optional)
         #   3 = day (1–2 digits, optional)
         #   4 = hour (1–2 digits, optional)
         #   5 = minute (1–2 digits, optional)
         pattern = (
-            r"^(\d{2,3})"
+            r"^(\d{2,4})"
             r"(?:-(\d{1,2})(?:-(\d{1,2}))?)?"
             r"(?::(\d{1,2})(?::(\d{1,2}))?)?$"
         )
@@ -604,7 +602,7 @@ class Caster:
         h_raw = s.str.extract(pattern, 4)
         min_raw = s.str.extract(pattern, 5)
 
-        # Length of the year token (2 or 3)
+        # Length of the year token (2, 3, or 4)
         y_len = y_raw.str.len_chars()
 
         # ---- Year normalization ----
@@ -628,6 +626,7 @@ class Caster:
         year4 = (
             pl.when(y_len == 2).then(year_2)
             .when(y_len == 3).then(year_3)
+            .when(y_len == 4).then(y_raw)
             .otherwise(None)
         )
 
@@ -661,43 +660,21 @@ class Caster:
             ]
         )
 
-        # Parse into Polars dtypes
-        date_expr = date_str.str.strptime(
-            pl.Date,
-            format="%Y-%m-%d",
-            strict=True,
-        )
-
-        dt_dtype = (
-            pl.Datetime(time_zone=self._datetime_time_zone)
-            if self._datetime_time_zone is not None
-            else pl.Datetime
-        )
-
-        datetime_expr = datetime_str.str.strptime(
-            dt_dtype,
-            format="%Y-%m-%d %H:%M",
-            strict=False,
-        )
-
-        # Detect whether a row explicitly contained time information
-        has_time = h_raw.is_not_null() | min_raw.is_not_null()
-
         # Output selection
-        if self._datetime_output == "date":
-            return date_expr
+        if output == "date":
+            return date_str.str.strptime(
+                pl.Date,
+                format="%Y-%m-%d",
+                strict=True,
+            )
 
-        if self._datetime_output == "datetime":
-            return datetime_expr
+        if output == "datetime":
+            return datetime_str.str.strptime(
+                pl.Datetime(time_zone=self._datetime_time_zone),
+                format="%Y-%m-%d %H:%M",
+                strict=True,
+            )
 
-        # output="auto":
-        #   return a Datetime column;
-        #   date-only rows become midnight
-        return (
-            pl.when(has_time)
-            .then(datetime_expr)
-            .otherwise(date_expr.cast(dt_dtype))
-        )
 
     def _float(self, s: pl.Expr) -> tuple[pl.Expr, pl.Expr]:
         """Parse a string column containing floats and optional parenthesized uncertainty.
