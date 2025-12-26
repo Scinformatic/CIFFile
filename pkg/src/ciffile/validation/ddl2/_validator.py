@@ -99,7 +99,6 @@ class DDL2Validator(CIFFileValidator):
         bool_false: Sequence[str] = ("NO",),
         bool_strip: bool = True,
         bool_case_insensitive: bool = True,
-        datetime_output: Literal["auto", "date", "datetime"] = "auto",
         datetime_time_zone: str | None = None,
         uchar_case_normalization: Literal["lower", "upper"] | None = "lower",
         # Enum options
@@ -144,11 +143,6 @@ class DDL2Validator(CIFFileValidator):
             Whether to strip whitespace from "boolean"-type values before casting.
         bool_case_insensitive
             Whether to perform case-insensitive matching for "boolean"-type values.
-        datetime_output
-            Output type for date/time data items.
-            - "auto": Use "date" if no time component is present; otherwise "datetime".
-            - "date": Always use date type.
-            - "datetime": Always use datetime type.
         datetime_time_zone
             Time zone to use for datetime data items.
             If `None`, no time zone is applied.
@@ -283,13 +277,13 @@ class DDL2Validator(CIFFileValidator):
             bool_false=bool_false,
             bool_strip=bool_strip,
             bool_case_insensitive=bool_case_insensitive,
-            datetime_output=datetime_output,
             datetime_time_zone=datetime_time_zone,
         )
         self._errs = []
 
         if file.container_type == "category":
-            return pl.DataFrame(self._validate_category(file))
+            self._validate_category(file)
+            return pl.DataFrame(self._errs)
 
         blocks: list[CIFBlock] = [file] if file.container_type == "block" else file
         for block in blocks:
