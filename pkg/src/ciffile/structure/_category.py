@@ -39,6 +39,13 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         self._item_names: list[str] | None = None
         return
 
+    @property
+    def item_names(self) -> list[str]:
+        """Full names of the data items in this data category."""
+        if self._item_names is None:
+            self._item_names = [item.name for item in self]
+        return self._item_names
+
     @CIFStructureWithItem.df.setter
     def df(self, new_df: pl.DataFrame) -> None:
         """Re-set the underlying DataFrame for this data category."""
@@ -53,7 +60,10 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         all_cols = cols + remaining_cols
         new_df = new_df.select(all_cols)
         self._df = new_df
+
+        # Refresh items
         self.refresh()
+        self._item_names = None
         return
 
     @property
@@ -100,13 +110,6 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         self._keys = keys
         self.df = df  # re-set to update column order
         return
-
-    @property
-    def item_names(self) -> list[str]:
-        """Full names of the data items in this data category."""
-        if self._item_names is None:
-            self._item_names = [item.name for item in self]
-        return self._item_names
 
     def __repr__(self) -> str:
         return f"CIFDataCategory(name={self._code!r}, shape={self._df.shape})"
