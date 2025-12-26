@@ -5,6 +5,8 @@ from typing import Sequence, Literal, NamedTuple
 
 import polars as pl
 
+from ciffile.typing import DataTypeLike
+
 
 class CastPlan(NamedTuple):
     """Plan for casting a column to a DDL2 data type.
@@ -64,8 +66,8 @@ class Caster:
         self,
         *,
         esd_col_suffix: str = "_esd",
-        dtype_float: pl.DataType = pl.Float64,
-        dtype_int: pl.DataType = pl.Int64,
+        dtype_float: DataTypeLike = pl.Float64,
+        dtype_int: DataTypeLike = pl.Int64,
         cast_strict: bool = True,
         bool_true: Sequence[str] = ("true", "yes", "y", "1"),
         bool_false: Sequence[str] = ("false", "no", "n", "0"),
@@ -709,7 +711,7 @@ class Caster:
         *,
         delimiter: str = ",",
         strip_elements: bool = True,
-        element_dtype: pl.DataType | None = None,
+        element_dtype: DataTypeLike | None = None,
     ) -> pl.Expr:
         """Parse a delimited string column into a list column.
 
@@ -754,7 +756,7 @@ class Caster:
         if delimiter == "":
             raise ValueError("`delimiter` must be a non-empty string.")
 
-        inner_dtype: pl.DataType = pl.Utf8 if element_dtype is None else element_dtype
+        inner_dtype: DataTypeLike = pl.Utf8 if element_dtype is None else element_dtype
 
         split_expr = expr.str.split(delimiter)
 
@@ -776,7 +778,7 @@ class Caster:
         self,
         expr: pl.Expr,
         *,
-        element_dtype: pl.DataType | None = None,
+        element_dtype: DataTypeLike | None = None,
     ) -> pl.Expr:
         """Parse a whitespace-separated string column into a list column.
 
@@ -808,7 +810,7 @@ class Caster:
             A Polars expression producing a nullable list column.
         """
         split_expr = expr.str.extract_all(r"\S+")
-        inner_dtype: pl.DataType = pl.Utf8 if element_dtype is None else element_dtype
+        inner_dtype: DataTypeLike = pl.Utf8 if element_dtype is None else element_dtype
         if element_dtype is not None:
             split_expr = split_expr.list.eval(
                 pl.element().cast(element_dtype, strict=self._cast_strict)
