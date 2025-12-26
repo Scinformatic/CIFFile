@@ -18,38 +18,52 @@ if TYPE_CHECKING:
 
 
 class DDL2Validator(CIFFileValidator):
-    """DDL2 validator for CIF files."""
+    """DDL2 validator for CIF files.
+
+    Parameters
+    ----------
+    dictionary
+        DDL2 dictionary metadata.
+    """
 
     def __init__(self, dictionary: dict) -> None:
         super().__init__(dictionary)
         DDL2Dictionary(**dictionary)  # validate dictionary structure
 
+        # Initialize list of mandatory categories
         dictionary["mandatory_categories"] = mandatory_categories = []
+
+        # Preprocess category definitions
         for category_id, category in dictionary["category"].items():
 
-            category["mandatory_items"] = []
-
+            # Add mandatory categories to list
             if category["mandatory"]:
                 mandatory_categories.append(category_id)
 
+            # Replace list of group IDs with dictionary of group IDs to group definitions
             category["groups"] = {
                 group_id: dictionary["category_group"][group_id]
                 for group_id in category.get("groups", [])
             }
 
+            # Initialize list of mandatory items in category
+            category["mandatory_items"] = []
+
+        # Preprocess item definitions
         for item_name, item in dictionary["item"].items():
 
             # Check mandatory items and add to category definition
             if item["mandatory"]:
                 dictionary["category"][item["category"]]["mandatory_items"].append(item_name)
 
+            # Replace list of sub-category IDs with dictionary of sub-category definitions
             item["sub_category"] = {
                 sub_cat: dictionary["sub_category"][sub_cat]
                 for sub_cat in item.get("sub_category", [])
             }
 
+            # Add type information from item_type definitions
             item_type = item["type"]
-
             item_type_info = dictionary["item_type"][item_type]
             item["type_primitive"] = item_type_info["primitive"]
             item["type_regex"] = _normalize_for_rust_regex(item_type_info["regex"])
@@ -59,7 +73,10 @@ class DDL2Validator(CIFFileValidator):
         self._curr_block_code: str | None = None
         self._curr_frame_code: str | None = None
         self._curr_category_code: str | None = None
+
         self._curr_item_defs: dict[str, dict[str, Any]] = {}
+        """Current item definitions for the category being validated."""
+
         self._add_category_info: bool = True
         self._add_item_info: bool = True
         self._uchar_case_normalization: Literal["lower", "upper"] | None = "lower"
@@ -93,7 +110,163 @@ class DDL2Validator(CIFFileValidator):
         add_category_info: bool = True,
         add_item_info: bool = True,
     ) -> pl.DataFrame:
-        """Validate a CIF file, block, or category against the DDL2 dictionary."""
+        """Validate a CIF file, data block, or category against the DDL2 dictionary.
+
+        Parameters
+        ----------
+        file
+            CIF file, data block, or data category to validate.
+        esd_col_suffix
+            Suffix for estimated standard deviation (ESD) columns.
+            When a (float-based) data item has associated ESD,
+            the caster will produce an additional column
+            with this suffix added to the original column name.
+            The original column will then contain the main data values,
+            while the ESD column contains the corresponding ESD values as integers.
+            The suffix should not cause name collisions with existing columns in the table,
+            i.e., adding the suffix to a data item name
+            should not produce the name of another data item in the same category.
+            If a name collision occurs,
+            an error will be raised during validation.
+        dtype_float
+            Polars data type to use for floating-point data items.
+        dtype_int
+            Polars data type to use for integer data items.
+        cast_strict
+            Whether to use strict casting for data type conversion.
+            - If `True`, invalid values will raise errors during casting.
+            - If `False`, invalid values will be converted to nulls/NaNs.
+        bool_true
+            Truthy strings for casting of "boolean"-type data items.
+        bool_false
+            Falsy strings for casting of "boolean"-type data items.
+        bool_strip
+            Whether to strip whitespace from "boolean"-type values before casting.
+        bool_case_insensitive
+            Whether to perform case-insensitive matching for "boolean"-type values.
+        datetime_output
+            Output type for date/time data items.
+            - "auto": Use "date" if no time component is present; otherwise "datetime".
+            - "date": Always use date type.
+            - "datetime": Always use datetime type.
+        datetime_time_zone
+            Time zone to use for datetime data items.
+            If `None`, no time zone is applied.
+        uchar_case_normalization
+            Case normalization for "uchar"-type (case-insensitive) data values.
+            If "lower", all values are converted to lowercase.
+            If "upper", all values are converted to uppercase.
+            If `None`, no case normalization is performed.
+        enum_to_bool
+            Whether to interpret enumerations with boolean-like values as booleans.
+        enum_true
+            List of strings representing `True` values for boolean enumerations.
+        enum_false
+            List of strings representing `False` values for boolean enumerations.
+        add_category_info
+            Whether to add category description, groups, and keys
+            from the dictionary to each validated category.
+        add_item_info
+            Whether to add item description, mandatory flag, default value,
+            enumeration, data type, range, and units
+            from the dictionary to each validated data item.
+
+        Returns
+        -------
+        validation_errors
+            DataFrame of validation errors.
+            Each row corresponds to a validation error,
+            with the following columns:
+            - "type": Type of validation error; one of:
+              - "undefined_category": Category is not defined in the dictionary.
+              - "undefined_item": Data item is not defined in the dictionary.
+              - "missing_category": Mandatory category is missing.
+              - "missing_item": Mandatory data item is missing.
+              - "missing_value": Missing value ("?") for data item with no default.
+              - "regex_violation": Value does not match data type regex.
+              - "enum_violation": Value not in enumeration.
+              - "range_violation": Value outside allowed range.
+            - "block": Data block code where the error occurred, or `null` if not applicable.
+            - "frame": Data frame code where the error occurred, or `null` if not applicable.
+            - "category": Data category code where the error occurred, or `null` if not applicable.
+            - "item": Data item name where the error occurred, or `null` if not applicable.
+            - "column": Specific column name in the DataFrame where the error occurred,
+              or `null` if not applicable.
+              This should be the same as "item" unless the caster produces multiple columns for a data item
+              (e.g., main column and ESD column), in which case this indicates the specific column.
+            - "rows": List of (0-based) row indices in the category table with validation errors for the data item,
+              or `null` if not applicable.
+
+        Notes
+        -----
+        The validation proceeds as follows:
+        1. The CIF file, data block, or data category is traversed.
+        2. For each data block, missing mandatory categories are reported as "missing_category" errors.
+        3. For each data category, if the category is not defined in the dictionary,
+           an "undefined_category" error is reported.
+           Otherwise, missing mandatory data items in the category
+           are reported as "missing_item" errors.
+           Additionally, if `add_category_info` is `True`,
+           category metadata (description, groups, keys) from the dictionary
+           are added to the category.
+        4. For each data item (column) in the category,
+           if the data item is not defined in the dictionary,
+           an "undefined_item" error is reported. Otherwise:
+
+           1. If the item has a default value defined,
+              all missing ("?") values in the column are replaced with the default value.
+              Otherwise, they are replaced with nulls,
+              and the item (column) name and the row indices of missing values
+              are reported as "missing_value" errors.
+           2. All values in the column that are not `null` or "." (i.e., not missing or inapplicable)
+              are checked against the construct regex.
+              Column names and row indices of values that do not match the construct
+              are reported as "regex_violation" errors.
+           3. If the data item is of primitive type "uchar" and case normalization is specified,
+              all values in the column are converted to the specified case.
+           4. The data is converted to the appropriate data type:
+              - "boolean": boolean type.
+              - "date_dep", "yyyy-mm-dd", "yyyy-mm-dd:hh:mm", and "yyyy-mm-dd:hh:mm-flex":
+                date or datetime type, depending on `datetime_output`.
+              - "entity_id_list", "id_list", "id_list_spc", "symmetry_operation", and "ucode-alphanum-csv": List of strings.
+              - "float": One floating-point column with the same name as the data item (containing values),
+                plus an integer column with the specified `esd_col_suffix` suffix (containing estimated standard deviations).
+              - "float-range": Two Array columns, each with 2 elements (min, max):
+                - One floating-point Array column with the same name as the data item (containing value ranges).
+                - One integer Array column with the specified `esd_col_suffix` suffix (containing estimated standard deviations for min and max).
+              - "int": Integer type.
+              - "int-range": Array column with 2 elements (min, max) of integers.
+              - "int_list": List of integers.
+              - "seq-one-letter-code" and "sequence_dep": String type with no whitespace.
+
+              This also converts any inapplicable (".") values to nulls/NaNs/empty strings
+              as appropriate for the data type
+              (i.e., NaN for float, empty string for string, null for boolean/integer/date types).
+           5. If the item has an enumeration defined,
+              all values that are not missing or inapplicable (null/NaN/empty strings)
+              are checked against the enumeration,
+              and column names and row indices of values not in the enumeration are reported
+              as "enum_violation" errors.
+              If `enum_to_bool` is `True` and the values correspond to boolean-like values
+              (i.e., all enumeration values are in `enum_true` or `enum_false`),
+              the column is replaced with a boolean column.
+              Otherwise, if all values are in the enumeration, the column is replaced
+              with an Enum column (or List/Array of Enum, if applicable)
+              with fixed categories defined by the enumeration
+              (an extra category `""` for missing/inapplicable values is added automatically).
+              Note that if the data item is of primitive type "uchar"
+              and case normalization is specified,
+              the enumeration values are also normalized to the specified case before checking/conversion.
+           6. If the item has a range defined,
+              all values are checked against the range,
+              and column names and row indices of values outside the range are reported
+              as "range_violation" errors.
+              A range can only be defined for numeric data items.
+           7. If `add_item_info` is `True`,
+              item metadata (description, mandatory flag, default value,
+              enumeration, data type, range, units) from the dictionary
+              are added to the data item.
+        """
         self._add_category_info = add_category_info
         self._add_item_info = add_item_info
         self._uchar_case_normalization = uchar_case_normalization
@@ -136,7 +309,7 @@ class DDL2Validator(CIFFileValidator):
         return pl.DataFrame(self._errs)
 
     def _validate_category(self, cat: CIFDataCategory) -> None:
-
+        """Validate an mmCIF data category against the DDL2 dictionary."""
         catdef = self["category"].get(cat.code)
         if catdef is None:
             self._err(type="undefined_category")
@@ -191,135 +364,11 @@ class DDL2Validator(CIFFileValidator):
             and all values are strings or nulls.
             Strings represent parsed mmCIF values,
             i.e., with no surrounding quotes.
-        item_defs
-            Dictionary of data item definitions for the category.
-            Keys are data item keywords (column names),
-            and values are dictionaries with the following key-value pairs:
-            - "default" (string | None): Default value for the data item (as a string),
-            or `None` if no default is specified.
-            - "enum" (list of strings | None): List of allowed values for the data item;
-            or `None` if no enumeration is specified.
-            - "range" (list of 2-tuples of floats or None | None): List of allowed ranges for the data item.
-            Each range is a 2-tuple indicating an exclusive minimum and maximum value, respectively.
-            A value of `None` for minimum or maximum indicates no bound in that direction.
-            If both minimum and maximum are the same non-None float value,
-            it indicates that only that exact value is allowed.
-            The allowed range for the data item is the union of all specified ranges.
-            If `None`, no range is specified.
-            - "type" (string): Data item type code, corresponding to a DDL2 item type defined.
-            - "type_primitive" ({"numb", "char", "uchar"}): Primitive data type code; one of:
-            - "numb": numerically intererpretable string
-            - "char": case-sensitive character or text string
-            - "uchar": case-insensitive character or text string
-            - "type_regex" (string): Data type construct (regex).
-        caster
-            Data type casting function for the data item.
-            The function takes a column name or Polars expression as first input,
-            and the data type code (`item_defs[item]["type"]`) as second input,
-            and returns a list of one or several `CastPlan` objects with the following attributes:
-            - `expr` (pl.Expr): Polars expression that yields a column from the input column.
-            - `dtype` (literal): Type of the leaf data values produced by the expression; one of:
-                - "str": string
-                - "float": floating-point number
-                - "int": integer
-                - "bool": boolean
-                - "date": date/datetime
-            - `container` (literal or None): Container type of the data values; one of:
-                - None: No container; scalar values
-                - "list": List of values
-                - "array": Array of values
-                - "array_list": List of arrays of values
-
-                Together with `dtype`, this indicates the structure of the data values.
-                For example, if `dtype` is "float" and `container` is "array_list",
-                it indicates that each element in the output column
-                is a List of Arrays of floating-point numbers.
-            - `suffix` (string): Suffix to add to the input column name for the output column.
-            If empty string, the output column has the same name as the input column.
-            - `main` (boolean): Whether the column contains main data values,
-            i.e., values for which other validations (enumeration, range) are performed.
-            If `False`, the column contains auxiliary data values
-            (e.g., estimated standard deviations) that are not subject to these validations.
-            Note that more than one main column may be produced by the caster function.
-
-            The input column is thus replaced with the set of columns produced by the caster function.
-            Note that the suffix may cause name collisions with existing columns in the table.
-            These are handled as described below.
-        case_normalization
-            Case normalization for "uchar" (case-insensitive character) data items.
-            If "lower", all values are converted to lowercase.
-            If "upper", all values are converted to uppercase.
-            If `None`, no case normalization is performed.
-        enum_to_bool
-            Whether to interpret enumerations with boolean-like values as booleans.
-        enum_true
-            List of strings representing `True` values for boolean enumerations.
-        enum_false
-            List of strings representing `False` values for boolean enumerations.
 
         Returns
         -------
         validated_table
             Processed mmCIF category table as a Polars DataFrame.
-        validation_errors
-            List of validation error dictionaries.
-            Each dictionary contains the following key-value pairs:
-            - "item" (string): Data item (column) name.
-            - "column" (string): Specific column name in the DataFrame where the error occurred.
-            When the caster produces multiple columns for a data item, this indicates the specific column.
-            - "row_indices" (list of int): List of row indices (0-based) with validation errors for the data item.
-            - "error_type" (string): Type of validation error.
-            One of: "missing_value", "construct_mismatch", "enum_violation",
-            "range_violation", "auxiliary_mismatch".
-
-        Notes
-        -----
-        The procedure works as follows for each data item (column) in the table:
-        1. If the item has a default value defined,
-        all missing ("?") values in the column are replaced with the default value.
-        Otherwise, the item (column) name and the row indices of missing values are collected,
-        and missing values are replaced with nulls.
-        2. All values in the column that are not `null` or "." (i.e., not missing or inapplicable)
-        are checked against the construct regex.
-        Column names and row indices of values that do not match the construct are collected.
-        3. If the data item is of primitive type "uchar"
-        and case normalization is specified,
-        all values in the column are converted to the specified case.
-        4. The data is converted to the appropriate data type
-        using the caster function defined for the data item.
-        This also converts any inapplicable (".") values to nulls/NaNs/empty strings
-        as appropriate for the data type
-        (i.e., NaN for float, empty string for string, null for boolean/integer/date types).
-        5. If the item has an enumeration defined,
-        all values in the "main" produced columns that are not null/NaN/empty strings
-        are checked against the enumeration,
-        and column names and row indices of values not in the enumeration are collected.
-        If all values are in the enumeration, the column is replaced
-        with an Enum column (or List/Array of Enum, if applicable) with fixed categories defined by the enumeration.
-        If `enum_to_bool` is `True` and the  values corresponds to boolean-like values
-        (i.e., all enumeration values are in `enum_true` or `enum_false`; case-insensitive),
-        the column is replaced with a boolean column.
-        Note that if the data item is of primitive type "uchar"
-        and case normalization is specified,
-        the enumeration values are also normalized to the specified case before checking/conversion.
-        6. If the item has a range defined,
-        all values in the "main" produced columns are checked against the range,
-        and column names and row indices of values outside the range are collected.
-        A range is only defined for numeric data items.
-        7. The input column is replaced with the casted and transformed column(s).
-        It may be the case that the caster function produces columns with names
-        that already exist in the input table (due to suffixes; e.g.,
-        an input column "coord" may need to be replaced with "coord" and "coord_esd",
-        while "coord_esd" may already exist in the input table).
-        In this case, for each such column:
-            - For rows where the casted original column value is null/NaN,
-            the value from the caster-produced column is used.
-            - For rows where the casted original column value is not null/NaN,
-            it is compared with the caster-produced column,
-            and any discrepancies are collected.
-
-            Note that this step is performed after all columns have been processed,
-            since otherwise we may be comparing one casted column against another non-casted raw column.
         """
 
         # Per spec: all values are strings or nulls.
@@ -651,7 +700,6 @@ class DDL2Validator(CIFFileValidator):
             "regex_violation",
             "enum_violation",
             "range_violation",
-            "auxiliary_mismatch",
         ],
         *,
         item: str | None = None,
