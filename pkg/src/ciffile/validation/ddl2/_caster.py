@@ -97,6 +97,8 @@ class Caster:
             "int": self.int,
             "int-range": self.int_range,
             "int_list": self.int_list,
+            "seq-one-letter-code": self.seq_one_letter_code,
+            "sequence_dep": self.sequence_dep,
             "symmetry_operation": self.symmetry_operation,
             "ucode-alphanum-csv": self.ucode_alphanum_csv,
             "yyyy-mm-dd": self.yyyy_mm_dd,
@@ -481,6 +483,12 @@ class Caster:
         )
         return [CastPlan(expr=exprr, dtype="int")]
 
+    def seq_one_letter_code(self, expr: pl.Expr) -> list[CastPlan]:
+        return [CastPlan(expr=self._no_space(expr), dtype="str")]
+
+    def sequence_dep(self, expr: pl.Expr) -> list[CastPlan]:
+        return [CastPlan(expr=self._no_space(expr), dtype="str")]
+
     def symmetry_operation(self, expr: pl.Expr) -> list[CastPlan]:
         expr = self._list_delimited(expr, element_dtype=pl.Utf8)
         return [CastPlan(expr=expr, dtype="str", container="list")]
@@ -813,6 +821,24 @@ class Caster:
             .otherwise(split_expr)
         )
 
+    def _no_space(
+        self,
+        expr: pl.Expr,
+    ) -> pl.Expr:
+        """Remove all whitespace characters from a string column.
+
+        Parameters
+        ----------
+        expr
+            Polars expression referring to the input string column.
+
+        Returns
+        -------
+        pl.Expr
+            A Polars expression producing a nullable string column.
+            Null values remain null.
+        """
+        return expr.str.replace_all(r"\s+", "")
 
 def _3x4_matrices(col: str | pl.Expr) -> tuple[pl.Expr, pl.Expr]:
     """Validate and cast '3x4_matrices' dtype.
