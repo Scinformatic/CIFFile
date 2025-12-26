@@ -23,9 +23,19 @@ class CastPlan(NamedTuple):
         - "list": List of values.
         - "array": Fixed-size array of values.
         - "array_list": List of fixed-size arrays.
+
+        Together with `dtype`, this indicates the structure of the data values.
+        For example, if `dtype` is "float" and `container` is "array_list",
+        it indicates that each element in the output column
+        is a List of Arrays of floating-point numbers.
     suffix
         Suffix to append to the original column name after casting.
         If empty, the original column name is retained.
+    main
+        Whether the column contains main data values,
+        i.e., values for which other validations (enumeration, range) are performed.
+        If `False`, the column contains auxiliary data values
+        (e.g., estimated standard deviations) that are not subject to these validations.
     """
 
     expr: pl.Expr
@@ -41,25 +51,36 @@ class Caster:
     Parameters
     ----------
     esd_col_suffix
-        Suffix for uncertainty columns (for float/range types).
+        Suffix for estimated standard deviation (ESD) columns.
+        When a (float-based) data item has associated ESD,
+        the caster will produce an additional column
+        with this suffix added to the original column name.
+        The original column will then contain the main data values,
+        while the ESD column contains the corresponding ESD values as integers.
     dtype_float
-        Float dtype for float types.
+        Polars data type to use for floating-point data items.
     dtype_int
-        Integer dtype for integer types.
+        Polars data type to use for integer data items.
     cast_strict
-        Whether to perform strict casts.
-    bool_truthy
-        Truthy strings for boolean casting.
-    bool_falsey
-        Falsey strings for boolean casting.
+        Whether to use strict casting for data type conversion.
+        - If `True`, invalid values will raise errors during casting.
+        - If `False`, invalid values will be converted to nulls/NaNs.
+    bool_true
+        Truthy strings for casting of "boolean"-type data items.
+    bool_false
+        Falsy strings for casting of "boolean"-type data items.
     bool_strip
-        Whether to strip whitespace when casting booleans.
+        Whether to strip whitespace from "boolean"-type values before casting.
     bool_case_insensitive
-        Whether to match booleans case-insensitively.
+        Whether to perform case-insensitive matching for "boolean"-type values.
     datetime_output
-        Output type for partial datetime parsing.
+        Output type for date/time data items.
+        - "auto": Use "date" if no time component is present; otherwise "datetime".
+        - "date": Always use date type.
+        - "datetime": Always use datetime type.
     datetime_time_zone
-        Time zone for datetime parsing.
+        Time zone to use for datetime data items.
+        If `None`, no time zone is applied.
     """
 
     def __init__(
@@ -69,8 +90,8 @@ class Caster:
         dtype_float: DataTypeLike = pl.Float64,
         dtype_int: DataTypeLike = pl.Int64,
         cast_strict: bool = True,
-        bool_true: Sequence[str] = ("true", "yes", "y", "1"),
-        bool_false: Sequence[str] = ("false", "no", "n", "0"),
+        bool_true: Sequence[str] = ("YES",),
+        bool_false: Sequence[str] = ("NO",),
         bool_strip: bool = True,
         bool_case_insensitive: bool = True,
         datetime_output: Literal["auto", "date", "datetime"] = "auto",
@@ -124,6 +145,8 @@ class Caster:
         -------
         list[CastPlan]
             List of casting plans (one or two, depending on type).
+            The input column should be replaced
+            with the set of columns produced by the casting plans.
         """
         col = pl.col(col) if isinstance(col, str) else col
         return self._type_to_caster.get(type, self.any)(col)
@@ -483,7 +506,7 @@ class Caster:
             .then(pl.lit([None, None], dtype=out_dtype))
             .otherwise(range_pair)
         )
-        return [CastPlan(expr=exprr, dtype="int")]
+        return [CastPlan(expr=exprr, dtype="int", container="array")]
 
     def seq_one_letter_code(self, expr: pl.Expr) -> list[CastPlan]:
         return [CastPlan(expr=self._no_space(expr), dtype="str")]
