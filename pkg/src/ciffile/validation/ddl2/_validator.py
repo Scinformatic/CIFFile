@@ -68,21 +68,6 @@ class DDL2Validator(CIFFileValidator):
         self._errs: list[dict[str, Any]] = []
         return
 
-    @property
-    def dict_title(self) -> str | None:
-        """Title of the dictionary."""
-        return self._dict["title"]
-
-    @property
-    def dict_description(self) -> str | None:
-        """Description of the dictionary."""
-        return self._dict["description"]
-
-    @property
-    def dict_version(self) -> str | None:
-        """Version of the dictionary."""
-        return self._dict["version"]
-
     def validate(
         self,
         file: CIFFile | CIFBlock | CIFDataCategory,
@@ -513,10 +498,10 @@ class DDL2Validator(CIFFileValidator):
 
         return table.with_columns(transforms)
 
-    def _table_cast(self, table: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, list[ProducedColumn]]]:
+    def _table_cast(self, table: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, list[_ProducedColumn]]]:
         outs_seen: set[str] = set()
         exprs: list[pl.Expr] = []
-        produced_entries: dict[str, list[ProducedColumn]] = {}
+        produced_entries: dict[str, list[_ProducedColumn]] = {}
         for item_name, item_def in self._curr_item_defs.items():
             type_code = item_def["type"]
             col = pl.col(item_name)
@@ -529,7 +514,7 @@ class DDL2Validator(CIFFileValidator):
                 outs_seen.add(output_col_name)
                 exprs.append(plan.expr.alias(output_col_name))
                 produced.append(
-                    ProducedColumn(
+                    _ProducedColumn(
                         input_name=item_name,
                         output_name=output_col_name,
                         plan=plan,
@@ -540,7 +525,7 @@ class DDL2Validator(CIFFileValidator):
         df = table.with_columns(exprs)
         return df, produced_entries
 
-    def _table_enum(self, table: pl.DataFrame, produced_columns: dict[str, list[ProducedColumn]]) -> pl.DataFrame:
+    def _table_enum(self, table: pl.DataFrame, produced_columns: dict[str, list[_ProducedColumn]]) -> pl.DataFrame:
         exprs: list[pl.Expr] = []
 
         for item_name, item_def in self._curr_item_defs.items():
@@ -612,7 +597,7 @@ class DDL2Validator(CIFFileValidator):
         df = table.with_columns(exprs) if exprs else table
         return df
 
-    def _table_ranges(self, table: pl.DataFrame, produced_columns: dict[str, list[ProducedColumn]]) -> None:
+    def _table_ranges(self, table: pl.DataFrame, produced_columns: dict[str, list[_ProducedColumn]]) -> None:
 
         for item_name, item_def in self._curr_item_defs.items():
             ranges = item_def.get("range")
@@ -710,7 +695,7 @@ def _normalize_for_rust_regex(regex: str) -> str:
 
 
 @dataclass(frozen=True)
-class ProducedColumn:
+class _ProducedColumn:
     """One produced column emitted by one caster for one input item."""
     input_name: str
     output_name: str
