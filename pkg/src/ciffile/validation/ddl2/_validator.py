@@ -14,6 +14,7 @@ from ._caster import Caster, CastPlan
 
 if TYPE_CHECKING:
     from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
+    from ciffile.typing import DataTypeLike
 
 
 class DDL2Validator(CIFFileValidator):
@@ -74,8 +75,8 @@ class DDL2Validator(CIFFileValidator):
         *,
         # Casting options
         esd_col_suffix: str = "_esd_digits",
-        dtype_float: pl.DataType = pl.Float64,
-        dtype_int: pl.DataType = pl.Int64,
+        dtype_float: DataTypeLike = pl.Float64,
+        dtype_int: DataTypeLike = pl.Int64,
         cast_strict: bool = True,
         bool_true: Sequence[str] = ("YES",),
         bool_false: Sequence[str] = ("NO",),
