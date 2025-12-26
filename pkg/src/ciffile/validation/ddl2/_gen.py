@@ -1,4 +1,4 @@
-"""DDL2 validator."""
+"""DDL2 validator generator."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ class DDL2Generator:
         item = self._gen_item()
         out = {
             "title": dic.get("dictionary").get("title").value,
-            "description": nws(dic.get("datablock").get("description").value or ''),
+            "description": nws(str(dic.get("datablock").get("description").value) or ''),
             "version": dic.get("dictionary").get("version").value,
             "category_group": self._gen_cat_group_list(),
             "item_type": self._gen_item_type_list(),
