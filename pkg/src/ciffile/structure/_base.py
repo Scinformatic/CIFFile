@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod, ABCMeta
-from typing import Literal, Generic, TypeVar, Iterator, TypeAlias, Callable, Sequence, Self, TYPE_CHECKING, overload
+from typing import Literal, Generic, TypeVar, Iterator, TypeAlias, Callable, Sequence, Self, TYPE_CHECKING, overload, Any
 
 import polars as pl
 
@@ -555,6 +555,23 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
         chunks = []
         self.write(chunks.append)
         return "".join(chunks)
+
+    def __eq__(self, other: Any) -> bool:
+        """Equality comparison for CIF data structures."""
+        if not isinstance(other, CIFStructureWithItem):
+            return False
+        if self.container_type != other.container_type:
+            return False
+        if self.code != other.code:
+            return False
+        df_self = self.df
+        df_other = other.df
+        if df_self.schema != df_other.schema:
+            return False
+        cols = sorted(df_self.columns)
+        df_self_sorted = df_self.select(cols).sort(cols)
+        df_other_sorted = df_other.select(cols).sort(cols)
+        return df_self_sorted.equals(df_other_sorted, null_equal=True)
 
     def _write(
         self,
