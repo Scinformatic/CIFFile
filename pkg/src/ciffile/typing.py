@@ -3,9 +3,10 @@
 This module defines type-hints used throughout the package.
 """
 
-from typing import TypeAlias
+from typing import TypeAlias, Any
 
 from fileex.typing import FileLike, PathLike
+import polars as pl
 import polars._typing as plt
 
 
@@ -23,6 +24,9 @@ __all__ = [
 
 DataFrameLike: TypeAlias = plt.FrameInitTypes
 """A DataFrame-like input, compatible with Polars DataFrames."""
+
+DataTypeLike: TypeAlias = plt.PolarsDataType | plt.PythonDataType
+"""A data type compatible with Polars data types."""
 
 
 BlockCode: TypeAlias = str
