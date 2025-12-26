@@ -32,9 +32,16 @@ Other Python packages with CIF/mmCIF support:
 
 from .creator import create
 from .reader import read
+from .structure import CIFFile, CIFBlock, CIFBlockFrames, CIFFrame, CIFDataCategory, CIFDataItem
 from .validation import validator
 
 __all__ = [
+    "CIFFile",
+    "CIFBlock",
+    "CIFBlockFrames",
+    "CIFFrame",
+    "CIFDataCategory",
+    "CIFDataItem",
     "create",
     "read",
     "validator",
