@@ -59,6 +59,10 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         remaining_cols = sorted([col for col in new_df.columns if col not in cols])
         all_cols = cols + remaining_cols
         new_df = new_df.select(all_cols)
+
+        if self.keys:
+            new_df = new_df.sort(by=self.keys, nulls_last=True)
+
         self._df = new_df
 
         # Refresh items
