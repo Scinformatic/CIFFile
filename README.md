@@ -27,6 +27,7 @@ pip install ciffile
 ### Dependencies
 
 - [Polars](https://pola.rs/) >= 1.0 (high-performance DataFrame library)
+- [Pydantic](https://docs.pydantic.dev/latest/) >= 2 (data validation)
 - [FileEx](https://github.com/scinformatic/fileex) >= 0.2.9 (file handling utilities)
 - [tqdm](https://github.com/tqdm/tqdm) >= 4.0 (progress bars)
 
