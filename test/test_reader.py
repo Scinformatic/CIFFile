@@ -73,11 +73,12 @@ class TestCIFReader:
         assert len(cif) == 1
         block = cif[0]
 
-        # Check single items
+        # Check single items (category = item name for CIF1 single items)
         assert "single_item_1" in block.codes
 
-        # Check loop items
-        assert "loop_item_1" in block.codes
+        # Check loop items (category = loop ID for CIF1 loops)
+        # Loop items are grouped under numeric category IDs
+        assert "1" in block.codes
 
     def test_read_mmcif_variant(self, sample_mmcif_content: str) -> None:
         """Test reading an mmCIF format file.
