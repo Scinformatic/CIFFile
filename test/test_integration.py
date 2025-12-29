@@ -202,7 +202,7 @@ class TestCIFIntegration:
             "values": flat_values,
         }
 
-        cif = ciffile.create(data_flat, variant="mmcif")
+        cif = ciffile.create(data_flat, variant="mmcif", allow_duplicate_rows=True)
 
         # Write to string
         cif_str = str(cif)
@@ -286,7 +286,7 @@ class TestLargeFileIntegration:
             "values": [[str(i)] for i in range(num_rows)] + [[str(i * 2)] for i in range(num_rows)],
         }
 
-        cif = ciffile.create(data, variant="mmcif")
+        cif = ciffile.create(data, variant="mmcif", allow_duplicate_rows=True)
 
         # Verify structure
         block = cif[0]
@@ -310,6 +310,6 @@ class TestLargeFileIntegration:
 
         import polars as pl
         df = pl.DataFrame(all_data)
-        cif = ciffile.create(df, variant="mmcif")
+        cif = ciffile.create(df, variant="mmcif", allow_duplicate_rows=True)
 
         assert len(cif) == num_blocks
