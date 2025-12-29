@@ -4,6 +4,7 @@ import pytest
 import polars as pl
 
 from ciffile._helper import normalize_whitespace
+from ciffile.structure._util import validate_content_df
 
 
 @pytest.mark.unit
@@ -94,6 +95,35 @@ class TestHelperFunctions:
         result = normalize_whitespace(input_str, df=None)
 
         assert result == "line1 line2 line3 line4"
+
+
+@pytest.mark.unit
+class TestValidateContentDF:
+    """Tests for validate_content_df duplicate handling."""
+
+    def test_rejects_duplicate_rows_by_default(self) -> None:
+        data = {
+            "block": ["b1", "b1"],
+            "category": ["cat", "cat"],
+            "keyword": ["k1", "k1"],
+            "values": [["a"], ["b"]],
+        }
+
+        with pytest.raises(ValueError):
+            validate_content_df(data)
+
+    def test_allows_duplicate_rows_when_opt_in(self) -> None:
+        data = {
+            "block": ["b1", "b1"],
+            "category": ["cat", "cat"],
+            "keyword": ["k1", "k1"],
+            "values": [["a"], ["b"]],
+        }
+
+        df = validate_content_df(data, allow_duplicate_rows=True)
+
+        assert df.shape[0] == 1
+        assert df["values"].to_list()[0] == ["a", "b"]
 
 
 @pytest.mark.unit
