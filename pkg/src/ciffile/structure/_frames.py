@@ -22,6 +22,7 @@ class CIFBlockFrames(CIFStructureWithFrame[CIFFrame]):
         col_name_values: str,
         code: None = None,
         col_name_block: None = None,
+        allow_duplicate_rows: bool = False,
     ):
         super().__init__(
             code=code,
@@ -36,6 +37,7 @@ class CIFBlockFrames(CIFStructureWithFrame[CIFFrame]):
             col_name_cat=col_name_cat,
             col_name_key=col_name_key,
             col_name_values=col_name_values,
+            allow_duplicate_rows=allow_duplicate_rows,
         )
 
         self._has_frames = col_name_frame is not None
