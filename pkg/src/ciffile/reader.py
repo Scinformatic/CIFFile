@@ -25,6 +25,7 @@ def read(
     col_name_cat: str = "category",
     col_name_key: str = "keyword",
     col_name_values: str = "values",
+    allow_duplicate_rows: bool = False,
 ) -> CIFFile:
     """Read a CIF file from content, path, or a file-like object.
 
@@ -69,6 +70,9 @@ def read(
     col_name_values
         Name of the column in the resulting CIFFile
         that will contain the values of each data item.
+    allow_duplicate_rows
+        Whether to permit duplicate rows (same block, frame, category, key)
+        and aggregate them during validation. Defaults to False.
 
     Returns
     -------
@@ -103,6 +107,7 @@ def read(
         col_name_cat=col_name_cat,
         col_name_key=col_name_key,
         col_name_values=col_name_values,
+        allow_duplicate_rows=allow_duplicate_rows,
     )
     if parsing_errors:
         raise CIFFileReadError(
