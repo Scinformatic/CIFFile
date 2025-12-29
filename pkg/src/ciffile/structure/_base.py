@@ -700,7 +700,7 @@ class CIFStructureWithCategory(CIFStructureWithItem[ElementType]):
         self._col_cat = col_name_cat
         self._col_key = col_name_key
         self._col_values = col_name_values
-    self._allow_duplicate_rows = allow_duplicate_rows
+        self._allow_duplicate_rows = allow_duplicate_rows
 
         self._filetype = filetype
         return
@@ -720,7 +720,7 @@ class CIFStructureWithCategory(CIFStructureWithItem[ElementType]):
         *category: str,
         col_name_block: str | None = "_block",
         col_name_frame: str | None = "_frame",
-        drop_redundant: bool = True,
+        drop_redundant: bool = False,
     ) -> CIFDataCategory | dict[str, CIFDataCategory]:
         """Extract data category tables from all data blocks/save frames.
 
