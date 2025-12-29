@@ -311,8 +311,8 @@ class DDL2Validator(CIFFileValidator):
         esd_col_suffix: str = "_esd_digits",
         bool_true: str = "YES",
         bool_false: str = "NO",
-        enum_true: str = "yes",
-        enum_false: str = "no",
+        enum_true: Sequence[str] = ("yes", "y", "true"),
+        enum_false: Sequence[str] = ("no", "n", "false"),
         date_format: str = "%Y-%m-%d",
         datetime_format: str = "%Y-%m-%d:%H:%M",
         nan_string: str = ".",
@@ -345,12 +345,14 @@ class DDL2Validator(CIFFileValidator):
             String to use for False values when converting "boolean"-type columns.
             Default is "NO" (standard CIF boolean false).
         enum_true
-            String to use for True values when converting boolean-like enum columns
-            (columns that were converted from enum to boolean via `enum_to_bool`).
-            Default is "yes".
+            Sequence of strings (case-insensitive) representing truthy values
+            for detecting boolean-like enum columns.
+            Used to determine if an enumeration should be treated as boolean.
+            Default is ("yes", "y", "true").
         enum_false
-            String to use for False values when converting boolean-like enum columns.
-            Default is "no".
+            Sequence of strings (case-insensitive) representing falsy values
+            for detecting boolean-like enum columns.
+            Default is ("no", "n", "false").
         date_format
             Format string for date output (strftime format).
             Default is "%Y-%m-%d" for "yyyy-mm-dd" format.
@@ -382,7 +384,10 @@ class DDL2Validator(CIFFileValidator):
         The reverse transformations are determined by DDL2 type code:
 
         - **"boolean"**: Uses `bool_true`/`bool_false` strings.
-        - **Boolean-like enums**: Uses `enum_true`/`enum_false` strings.
+        - **Boolean-like enums**: Detects columns where dtype is Boolean and item
+          has an enumeration with all values in `enum_true` or `enum_false`.
+          Picks a consistent pair of values from the original enumeration
+          (e.g., "yes"/"no" rather than "yes"/"n").
         - **"float"**: Merges with ESD column if present, NaN → ".".
         - **"float-range"**: Array → "min-max" or "val(esd)-val(esd)".
         - **"int"**: Cast to string.
@@ -399,12 +404,12 @@ class DDL2Validator(CIFFileValidator):
         >>> # Convert back to strings for CIF output
         >>> string_df = validator.values_to_str(validated_df, "atom_site")
         """
+        from ._stringifier import pick_bool_enum_pair
+
         stringifier = Stringifier(
             esd_col_suffix=esd_col_suffix,
             bool_true=bool_true,
             bool_false=bool_false,
-            enum_true=enum_true,
-            enum_false=enum_false,
             date_format=date_format,
             datetime_format=datetime_format,
             nan_string=nan_string,
@@ -418,9 +423,10 @@ class DDL2Validator(CIFFileValidator):
             if item_def.get("category") == category
         }
 
-        # Determine which columns are boolean-like enums
-        # (items with enumeration that was converted to boolean via enum_to_bool)
-        enum_bool_set = self._enum_true | self._enum_false
+        # Build lowercase sets for boolean-like enum detection
+        enum_true_set = {v.lower() for v in enum_true}
+        enum_false_set = {v.lower() for v in enum_false}
+        enum_bool_set = enum_true_set | enum_false_set
 
         exprs: list[pl.Expr] = []
         columns_to_drop: set[str] = set()
@@ -442,26 +448,46 @@ class DDL2Validator(CIFFileValidator):
             # Determine type code
             type_code = item_def.get("type", "any") if item_def else "any"
 
-            # Check if this is a boolean-like enum
-            is_bool_enum = False
-            if item_def and self._enum_to_bool:
+            # Get column dtype
+            col_dtype = df.schema.get(col_name)
+
+            # Check if this is a boolean-like enum:
+            # - Column dtype is Boolean
+            # - Item has an enumeration
+            # - All enumeration values (case-insensitive) are in enum_true or enum_false
+            bool_enum_true_val: str | None = None
+            bool_enum_false_val: str | None = None
+
+            if col_dtype == pl.Boolean and item_def:
                 enum = item_def.get("enumeration", {})
                 if enum:
-                    enum_vals_lower = {v.lower() for v in enum.keys()}
-                    is_bool_enum = enum_vals_lower.issubset(enum_bool_set)
+                    enum_vals = list(enum.keys())
+                    enum_vals_lower = {v.lower() for v in enum_vals}
+                    if enum_vals_lower.issubset(enum_bool_set):
+                        # Pick consistent pair from original enumeration
+                        pair = pick_bool_enum_pair(enum_vals, enum_true_set, enum_false_set)
+                        if pair:
+                            bool_enum_true_val, bool_enum_false_val = pair
 
             # Check if this column has an Enum dtype (non-bool enum)
-            col_dtype = df.schema.get(col_name)
-            if isinstance(col_dtype, pl.Enum) and not is_bool_enum:
+            if isinstance(col_dtype, pl.Enum):
                 # Use enum stringifier for Enum dtype columns
                 plans = stringifier.enum(col_name)
+            elif bool_enum_true_val is not None and bool_enum_false_val is not None:
+                # Use bool_enum stringification with values from enumeration
+                plans = stringifier(
+                    col_name,
+                    type_code,
+                    has_esd=has_esd,
+                    bool_enum_true=bool_enum_true_val,
+                    bool_enum_false=bool_enum_false_val,
+                )
             else:
                 # Use type-code-based dispatch
                 plans = stringifier(
                     col_name,
                     type_code,
                     has_esd=has_esd,
-                    is_bool_enum=is_bool_enum,
                 )
 
             for plan in plans:
