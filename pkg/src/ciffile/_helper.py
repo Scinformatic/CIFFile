@@ -53,14 +53,16 @@ def normalize_whitespace(
     """
     no_df = df is None
 
+    # Strings are treated as literal normalization when df is None
     if no_df and isinstance(target, str):
-        # Normalize a single string
         return " ".join(target.split())
+
+    # Build expression over the selected columns/expr
     if not isinstance(target, pl.Expr):
         target = pl.col(target)
     expr = (
         target
-        .str.replace_all(r"\s*(?:\r\n|\n|\r)\s*", " ")
+        .str.replace_all(r"\s+", " ")
         .str.strip_chars()
     )
     if no_df:
