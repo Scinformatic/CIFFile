@@ -17,7 +17,8 @@ class CIFFileError(Exception):
         self,
         message: str,
     ):
-        super().__init__(message=message, filetype="CIF")
+        super().__init__(message)
+        self.message = message
         return
 
 
