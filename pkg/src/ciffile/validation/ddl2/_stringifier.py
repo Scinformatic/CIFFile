@@ -44,16 +44,10 @@ class Stringifier:
         String to use for True values when converting "boolean"-type columns.
     bool_false
         String to use for False values when converting "boolean"-type columns.
-    enum_true
-        String to use for True values when converting boolean-like enum columns.
-    enum_false
-        String to use for False values when converting boolean-like enum columns.
     date_format
         Format string for date output (strftime format).
     datetime_format
         Format string for datetime output (strftime format).
-    list_delimiter
-        Delimiter used when joining comma-delimited list elements back to string.
     nan_string
         String to use for NaN values (typically ".").
     null_to_dot
@@ -66,22 +60,16 @@ class Stringifier:
         esd_col_suffix: str = "_esd_digits",
         bool_true: str = "YES",
         bool_false: str = "NO",
-        enum_true: str = "yes",
-        enum_false: str = "no",
         date_format: str = "%Y-%m-%d",
         datetime_format: str = "%Y-%m-%d:%H:%M",
-        list_delimiter: str = ",",
         nan_string: str = ".",
         null_to_dot: bool = False,
     ) -> None:
         self._esd_col_suffix = esd_col_suffix
         self._bool_true = bool_true
         self._bool_false = bool_false
-        self._enum_true = enum_true
-        self._enum_false = enum_false
         self._date_format = date_format
         self._datetime_format = datetime_format
-        self._list_delimiter = list_delimiter
         self._nan_string = nan_string
         self._null_to_dot = null_to_dot
 
@@ -113,7 +101,8 @@ class Stringifier:
         type_code: str,
         *,
         has_esd: bool = False,
-        is_bool_enum: bool = False,
+        bool_enum_true: str | None = None,
+        bool_enum_false: str | None = None,
     ) -> list[StringifyPlan]:
         """Get a stringification plan for a DDL2 data type.
 
@@ -125,10 +114,11 @@ class Stringifier:
             DDL2 data type name (same as used for Caster).
         has_esd
             Whether this column has an associated ESD column to merge.
-        is_bool_enum
-            Whether this column was converted from a boolean-like enumeration
-            (using enum_to_bool in validate). If True, uses enum_true/enum_false
-            strings instead of bool_true/bool_false.
+        bool_enum_true
+            String to use for True values when this is a boolean-like enum column.
+            If provided (along with bool_enum_false), uses bool_enum stringification.
+        bool_enum_false
+            String to use for False values when this is a boolean-like enum column.
 
         Returns
         -------
@@ -137,8 +127,8 @@ class Stringifier:
             output column. For types with ESD columns, consumes both main and ESD.
         """
         # Special handling for boolean-like enums
-        if is_bool_enum:
-            return self.bool_enum(col)
+        if bool_enum_true is not None and bool_enum_false is not None:
+            return self.bool_enum(col, bool_enum_true, bool_enum_false)
 
         # Dispatch to type-specific method
         stringifier = self._type_to_stringifier.get(type_code, self.any)
@@ -184,15 +174,15 @@ class Stringifier:
             consumes=(col,),
         )]
 
-    def bool_enum(self, col: str) -> list[StringifyPlan]:
-        """Stringify boolean-like enum using enum_true/enum_false."""
+    def bool_enum(self, col: str, true_val: str, false_val: str) -> list[StringifyPlan]:
+        """Stringify boolean-like enum using provided true/false values."""
         c = pl.col(col)
         expr = (
             pl.when(c.is_null())
             .then(None)
             .when(c)
-            .then(pl.lit(self._enum_true))
-            .otherwise(pl.lit(self._enum_false))
+            .then(pl.lit(true_val))
+            .otherwise(pl.lit(false_val))
         )
         return [StringifyPlan(
             expr=self._finalize(expr, col),
@@ -211,7 +201,7 @@ class Stringifier:
 
     def entity_id_list(self, col: str) -> list[StringifyPlan]:
         """Stringify 'entity_id_list' type: list → comma-separated."""
-        return self._list_to_delimited(col, self._list_delimiter)
+        return self._list_to_delimited(col, ",")
 
     def float(self, col: str) -> list[StringifyPlan]:
         """Stringify 'float' type without ESD: float → string, NaN → '.'."""
@@ -348,7 +338,7 @@ class Stringifier:
 
     def id_list(self, col: str) -> list[StringifyPlan]:
         """Stringify 'id_list' type: list → comma-separated."""
-        return self._list_to_delimited(col, self._list_delimiter)
+        return self._list_to_delimited(col, ",")
 
     def id_list_spc(self, col: str) -> list[StringifyPlan]:
         """Stringify 'id_list_spc' type: list → space-separated."""
@@ -395,7 +385,7 @@ class Stringifier:
 
     def int_list(self, col: str) -> list[StringifyPlan]:
         """Stringify 'int_list' type: list of integers → comma-separated."""
-        return self._list_to_delimited(col, self._list_delimiter)
+        return self._list_to_delimited(col, ",")
 
     def seq_one_letter_code(self, col: str) -> list[StringifyPlan]:
         """Stringify 'seq-one-letter-code' type: string passthrough."""
@@ -407,11 +397,11 @@ class Stringifier:
 
     def symmetry_operation(self, col: str) -> list[StringifyPlan]:
         """Stringify 'symmetry_operation' type: list → comma-separated."""
-        return self._list_to_delimited(col, self._list_delimiter)
+        return self._list_to_delimited(col, ",")
 
     def ucode_alphanum_csv(self, col: str) -> list[StringifyPlan]:
         """Stringify 'ucode-alphanum-csv' type: list → comma-separated."""
-        return self._list_to_delimited(col, self._list_delimiter)
+        return self._list_to_delimited(col, ",")
 
     def yyyy_mm_dd(self, col: str) -> list[StringifyPlan]:
         """Stringify 'yyyy-mm-dd' type: date → string."""
@@ -465,4 +455,81 @@ class Stringifier:
             output_name=col,
             consumes=(col,),
         )]
+
+
+def pick_bool_enum_pair(
+    enum_values: Sequence[str],
+    enum_true: set[str],
+    enum_false: set[str],
+) -> tuple[str, str] | None:
+    """Pick a consistent pair of truthy/falsy values from an enumeration.
+
+    Given an enumeration and sets of truthy/falsy indicators (lowercase),
+    returns a consistent pair of (true_value, false_value) from the original
+    enumeration values.
+
+    A "consistent" pair means values that match in pattern/length, e.g.,
+    ("yes", "no") or ("y", "n") or ("Yes", "No"), not ("yes", "n").
+
+    Parameters
+    ----------
+    enum_values
+        Original enumeration values (case-sensitive).
+    enum_true
+        Set of lowercase strings indicating truthy values.
+    enum_false
+        Set of lowercase strings indicating falsy values.
+
+    Returns
+    -------
+    tuple[str, str] | None
+        (truthy_value, falsy_value) pair, or None if no valid pair found.
+    """
+    # Separate enum values into truthy and falsy groups
+    truthy_vals: list[str] = []
+    falsy_vals: list[str] = []
+
+    for val in enum_values:
+        val_lower = val.lower()
+        if val_lower in enum_true:
+            truthy_vals.append(val)
+        elif val_lower in enum_false:
+            falsy_vals.append(val)
+
+    if not truthy_vals or not falsy_vals:
+        return None
+
+    # Try to find a consistent pair by matching lowercase patterns
+    # Group by lowercase value
+    truthy_by_lower: dict[str, list[str]] = {}
+    for val in truthy_vals:
+        truthy_by_lower.setdefault(val.lower(), []).append(val)
+
+    falsy_by_lower: dict[str, list[str]] = {}
+    for val in falsy_vals:
+        falsy_by_lower.setdefault(val.lower(), []).append(val)
+
+    # Look for matching pairs by length and case pattern
+    # e.g., "yes"/"no", "y"/"n", "Yes"/"No"
+    for t_lower, t_vals in truthy_by_lower.items():
+        for f_lower, f_vals in falsy_by_lower.items():
+            # Check if they match in length
+            if len(t_lower) == len(f_lower):
+                # Pick first value from each that matches case pattern
+                for t_val in t_vals:
+                    for f_val in f_vals:
+                        # Check case pattern match (both lowercase, both title, etc.)
+                        if (t_val.islower() == f_val.islower() and
+                            t_val.isupper() == f_val.isupper() and
+                            t_val.istitle() == f_val.istitle()):
+                            return (t_val, f_val)
+
+    # Fallback: try to find any pair with same length
+    for t_val in truthy_vals:
+        for f_val in falsy_vals:
+            if len(t_val) == len(f_val):
+                return (t_val, f_val)
+
+    # Last resort: just pick the first from each
+    return (truthy_vals[0], falsy_vals[0])
 
