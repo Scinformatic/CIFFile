@@ -22,6 +22,7 @@ class CIFFile(CIFStructureWithFrame[CIFBlock]):
         col_name_cat: str,
         col_name_key: str,
         col_name_values: str,
+        allow_duplicate_rows: bool = False,
         code: None = None,
     ):
         super().__init__(
@@ -37,6 +38,7 @@ class CIFFile(CIFStructureWithFrame[CIFBlock]):
             col_name_cat=col_name_cat,
             col_name_key=col_name_key,
             col_name_values=col_name_values,
+            allow_duplicate_rows=allow_duplicate_rows,
         )
         return
 
