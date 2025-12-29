@@ -27,6 +27,7 @@ class CIFBlock(CIFStructureWithFrame[CIFDataCategory]):
         col_name_key: str,
         col_name_values: str,
         col_name_block: None = None,
+        allow_duplicate_rows: bool = False,
     ):
         super().__init__(
             code=code,
@@ -41,6 +42,7 @@ class CIFBlock(CIFStructureWithFrame[CIFDataCategory]):
             col_name_cat=col_name_cat,
             col_name_key=col_name_key,
             col_name_values=col_name_values,
+            allow_duplicate_rows=allow_duplicate_rows,
         )
         self._frames: CIFBlockFrames | None = None
         return
