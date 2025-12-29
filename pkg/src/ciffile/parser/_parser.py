@@ -525,7 +525,12 @@ class CIFParser:
         self._curr_data_value = None
 
         if self._variant == "cif1":
-            self._curr_data_category = str(loop_id) if loop_id is not None else None
+            # In CIF 1.1, there is no explicit category.keyword syntax.
+            # Preserve loop/table grouping by assigning a synthetic category based on loop_id,
+            # and for single (non-loop) items, use the data name
+            # as the category to allow direct addressing (e.g., block["item"]).
+            self._curr_data_category = data_name if loop_id is None else str(loop_id)
+            # Use data_name as keyword for both single and loop items
             self._curr_data_keyword = data_name
         elif self._variant == "mmcif":
             last_data_category = self._curr_data_category
