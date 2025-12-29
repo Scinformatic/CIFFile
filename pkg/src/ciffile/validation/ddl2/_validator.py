@@ -11,6 +11,7 @@ import polars as pl
 from .._base import CIFFileValidator
 from ._input_schema import DDL2Dictionary
 from ._caster import Caster, CastPlan
+from ._stringifier import Stringifier
 
 if TYPE_CHECKING:
     from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
@@ -301,6 +302,165 @@ class DDL2Validator(CIFFileValidator):
                 self._curr_category_code = block_category.code
                 self._validate_category(block_category)
         return pl.DataFrame(self._errs)
+
+    def values_to_str(
+        self,
+        df: pl.DataFrame,
+        category: str,
+        *,
+        esd_col_suffix: str = "_esd_digits",
+        bool_true: str = "YES",
+        bool_false: str = "NO",
+        date_format: str = "%Y-%m-%d",
+        datetime_format: str = "%Y-%m-%d:%H:%M",
+        list_delimiter: str = ",",
+        nan_string: str = ".",
+        null_to_dot: bool = False,
+        drop_esd_columns: bool = True,
+    ) -> pl.DataFrame:
+        """Convert typed DataFrame columns back to CIF string format.
+
+        This method reverses the data type transformations performed by `validate()`,
+        converting typed Polars columns back to their original CIF string representations.
+
+        Parameters
+        ----------
+        df
+            DataFrame with typed columns (after `validate()` processing).
+        category
+            Category name (used to look up item definitions in the dictionary).
+        esd_col_suffix
+            Suffix used for estimated standard deviation (ESD) columns.
+            ESD columns will be merged back into the main column using parenthesized notation.
+            For example, if a column "value" has an ESD column "value_esd_digits",
+            the output will be "value(esd)" format like "1.234(5)".
+        bool_true
+            String to use for True values when converting boolean columns.
+            Default is "YES" (standard CIF boolean true).
+        bool_false
+            String to use for False values when converting boolean columns.
+            Default is "NO" (standard CIF boolean false).
+        date_format
+            Format string for date output (strftime format).
+            Default is "%Y-%m-%d" for "yyyy-mm-dd" format.
+        datetime_format
+            Format string for datetime output (strftime format).
+            Default is "%Y-%m-%d:%H:%M" for "yyyy-mm-dd:hh:mm" format.
+        list_delimiter
+            Delimiter used when joining list elements back to string.
+            Default is "," (comma-separated).
+        nan_string
+            String to use for NaN float values.
+            Default is "." (CIF inapplicable value).
+        null_to_dot
+            Whether to convert null values to "." in the output.
+            If False (default), null values remain null.
+            If True, null values become "." in the output strings.
+        drop_esd_columns
+            Whether to drop ESD columns from the output after merging.
+            Default is True.
+
+        Returns
+        -------
+        pl.DataFrame
+            DataFrame with all columns converted to string type (pl.Utf8).
+            ESD columns are merged into their main columns and optionally dropped.
+            Boolean/Enum columns are converted to their string representations.
+            Date/datetime columns are formatted as strings.
+            List/array columns are joined with the specified delimiter.
+
+        Notes
+        -----
+        The reverse transformations are:
+
+        1. **ESD columns**: Merged back into the main float column using parenthesized
+           notation. For example, value=1.234 with ESD=5 becomes "1.234(5)".
+
+        2. **Boolean columns**: Converted to `bool_true`/`bool_false` strings.
+           Null values remain null (or become "." if `null_to_dot=True`).
+
+        3. **Enum columns**: Converted to plain strings. Empty string enum values
+           (used for missing/inapplicable) become null.
+
+        4. **Date columns**: Formatted using `date_format` (default "yyyy-mm-dd").
+
+        5. **Datetime columns**: Formatted using `datetime_format` (default "yyyy-mm-dd:hh:mm").
+
+        6. **List columns**: Elements are joined with `list_delimiter`.
+           Empty lists become "." (inapplicable).
+
+        7. **Array columns** (ranges): Formatted as "min-max" for 2-element arrays.
+           If min==max, outputs single value. NaN arrays become ".".
+
+        8. **Float columns**: NaN becomes ".", null remains null or becomes ".".
+
+        9. **Integer columns**: Cast directly to string.
+
+        Examples
+        --------
+        >>> # After validate() produces typed columns
+        >>> validated_df = validator.validate(category)
+        >>> # Convert back to strings for CIF output
+        >>> string_df = validator.values_to_str(validated_df, "atom_site")
+        """
+        stringifier = Stringifier(
+            esd_col_suffix=esd_col_suffix,
+            bool_true=bool_true,
+            bool_false=bool_false,
+            date_format=date_format,
+            datetime_format=datetime_format,
+            list_delimiter=list_delimiter,
+            nan_string=nan_string,
+            null_to_dot=null_to_dot,
+        )
+
+        # Get item definitions for this category
+        item_defs = {
+            name: item_def
+            for name, item_def in self._dict["item"].items()
+            if item_def.get("category") == category
+        }
+
+        exprs: list[pl.Expr] = []
+        columns_to_drop: set[str] = set()
+        processed_cols: set[str] = set()
+
+        for col_name in df.columns:
+            if col_name in processed_cols:
+                continue
+
+            # Check if this is an ESD column
+            if col_name.endswith(esd_col_suffix):
+                # Will be handled when processing the main column
+                continue
+
+            # Find item definition
+            item_def = item_defs.get(col_name)
+            esd_col_name = f"{col_name}{esd_col_suffix}"
+            has_esd = esd_col_name in df.columns
+
+            plan = stringifier.stringify_column(
+                df,
+                col_name,
+                type_code=item_def.get("type") if item_def else None,
+                esd_col_name=esd_col_name if has_esd else None,
+            )
+
+            exprs.append(plan.expr)
+            processed_cols.add(col_name)
+
+            if has_esd and drop_esd_columns:
+                columns_to_drop.add(esd_col_name)
+                processed_cols.add(esd_col_name)
+
+        # Apply all string conversions
+        result = df.with_columns(exprs)
+
+        # Drop ESD columns if requested
+        if columns_to_drop:
+            result = result.drop(list(columns_to_drop))
+
+        return result
 
     def _validate_category(self, cat: CIFDataCategory) -> None:
         """Validate an mmCIF data category against the DDL2 dictionary."""
