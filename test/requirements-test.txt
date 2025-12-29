@@ -1,0 +1,25 @@
+# Test requirements for CIFFile
+# Install with: pip install -r requirements-test.txt
+
+# Core testing framework
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-xdist>=3.0.0  # For parallel test execution
+
+# Additional testing utilities
+pytest-timeout>=2.1.0  # Timeout for slow tests
+pytest-benchmark>=4.0.0  # Performance benchmarking
+
+# Required for CIFFile package
+polars>=1.0
+pandas>=2.0.0  # For pandas DataFrame tests
+fileex>=0.2.9,<0.3
+tqdm>=4.0,<5
+
+# Optional: for testing with real PDB files
+# pdbapi>=0.1.0
+
+# Code quality tools (optional)
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.0.0
