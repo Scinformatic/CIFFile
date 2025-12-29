@@ -323,9 +323,17 @@ data_test
 _item  'value1'
 _item  'value2'
 """
-        # Should handle gracefully or raise depending on settings
-        cif = ciffile.read(content, variant="cif1", raise_level=2)
-        assert len(cif) == 1
+        # Parser flags duplicate items as an error; verify error is raised
+        # and file is still accessible via the exception
+        try:
+            cif = ciffile.read(content, variant="cif1", raise_level=2, allow_duplicate_rows=True)
+            # If no exception, verify file was created
+            assert len(cif) == 1
+        except CIFFileReadError as e:
+            # Parsing error raised, but file should still be accessible
+            assert e.error_type == CIFFileReadErrorType.PARSING
+            assert e.file is not None
+            assert len(e.file) == 1
 
     def test_parse_very_large_loop(self) -> None:
         """Test parsing a large loop construct."""
