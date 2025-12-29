@@ -32,26 +32,32 @@ class Stringifier:
     This class reverses the transformations performed by the `Caster` class,
     converting typed Polars columns back to their original CIF string representations.
 
+    The method dispatch mirrors `Caster`: each DDL2 type code has a corresponding
+    method that knows exactly how to reverse that specific transformation.
+
     Parameters
     ----------
     esd_col_suffix
         Suffix used for estimated standard deviation (ESD) columns.
         ESD columns will be merged back into the main column using parenthesized notation.
     bool_true
-        String to use for True values when converting boolean columns.
+        String to use for True values when converting "boolean"-type columns.
     bool_false
-        String to use for False values when converting boolean columns.
+        String to use for False values when converting "boolean"-type columns.
+    enum_true
+        String to use for True values when converting boolean-like enum columns.
+    enum_false
+        String to use for False values when converting boolean-like enum columns.
     date_format
         Format string for date output (strftime format).
     datetime_format
         Format string for datetime output (strftime format).
     list_delimiter
-        Delimiter used when joining list elements back to string.
+        Delimiter used when joining comma-delimited list elements back to string.
     nan_string
         String to use for NaN values (typically ".").
-    null_string
-        String to use for inapplicable/null values that should become ".".
-        When None, null values remain null in the output.
+    null_to_dot
+        Whether to convert null values to "." in the output.
     """
 
     def __init__(
@@ -60,6 +66,8 @@ class Stringifier:
         esd_col_suffix: str = "_esd_digits",
         bool_true: str = "YES",
         bool_false: str = "NO",
+        enum_true: str = "yes",
+        enum_false: str = "no",
         date_format: str = "%Y-%m-%d",
         datetime_format: str = "%Y-%m-%d:%H:%M",
         list_delimiter: str = ",",
@@ -69,200 +77,163 @@ class Stringifier:
         self._esd_col_suffix = esd_col_suffix
         self._bool_true = bool_true
         self._bool_false = bool_false
+        self._enum_true = enum_true
+        self._enum_false = enum_false
         self._date_format = date_format
         self._datetime_format = datetime_format
         self._list_delimiter = list_delimiter
         self._nan_string = nan_string
         self._null_to_dot = null_to_dot
 
-    def stringify_column(
+        # Map DDL2 type codes to stringifier methods (mirrors Caster._type_to_caster)
+        self._type_to_stringifier = {
+            "any": self.any,
+            "boolean": self.boolean,
+            "date_dep": self.date_dep,
+            "entity_id_list": self.entity_id_list,
+            "float": self.float,
+            "float-range": self.float_range,
+            "id_list": self.id_list,
+            "id_list_spc": self.id_list_spc,
+            "int": self.int,
+            "int-range": self.int_range,
+            "int_list": self.int_list,
+            "seq-one-letter-code": self.seq_one_letter_code,
+            "sequence_dep": self.sequence_dep,
+            "symmetry_operation": self.symmetry_operation,
+            "ucode-alphanum-csv": self.ucode_alphanum_csv,
+            "yyyy-mm-dd": self.yyyy_mm_dd,
+            "yyyy-mm-dd:hh:mm": self.yyyy_mm_dd_hh_mm,
+            "yyyy-mm-dd:hh:mm-flex": self.yyyy_mm_dd_hh_mm_flex,
+        }
+
+    def __call__(
         self,
-        df: pl.DataFrame,
-        col_name: str,
+        col: str,
+        type_code: str,
         *,
-        type_code: str | None = None,
-        esd_col_name: str | None = None,
-        enum_values: list[str] | None = None,
+        has_esd: bool = False,
         is_bool_enum: bool = False,
-    ) -> StringifyPlan:
-        """Generate a plan to stringify a column back to CIF string format.
+    ) -> list[StringifyPlan]:
+        """Get a stringification plan for a DDL2 data type.
 
         Parameters
         ----------
-        df
-            DataFrame containing the column.
-        col_name
-            Name of the column to stringify.
+        col
+            Column name to stringify.
         type_code
-            DDL2 type code (e.g., "float", "int", "yyyy-mm-dd").
-            If None, type is inferred from the Polars dtype.
-        esd_col_name
-            Name of the ESD column to merge, if any.
-        enum_values
-            Original enumeration values, if the column was an enum.
+            DDL2 data type name (same as used for Caster).
+        has_esd
+            Whether this column has an associated ESD column to merge.
         is_bool_enum
-            Whether the column is a boolean-like enum (converted from enum to bool).
+            Whether this column was converted from a boolean-like enumeration
+            (using enum_to_bool in validate). If True, uses enum_true/enum_false
+            strings instead of bool_true/bool_false.
 
         Returns
         -------
-        StringifyPlan
-            Plan for converting the column back to string.
+        list[StringifyPlan]
+            List of stringification plans. Usually one plan that produces the
+            output column. For types with ESD columns, consumes both main and ESD.
         """
-        col = pl.col(col_name)
-        dtype = df.schema[col_name]
+        # Special handling for boolean-like enums
+        if is_bool_enum:
+            return self.bool_enum(col)
 
-        consumes = [col_name]
-        if esd_col_name and esd_col_name in df.columns:
-            consumes.append(esd_col_name)
+        # Dispatch to type-specific method
+        stringifier = self._type_to_stringifier.get(type_code, self.any)
 
-        # Handle ESD merging for float columns
-        if esd_col_name and esd_col_name in df.columns:
-            expr = self._merge_float_with_esd(col_name, esd_col_name, dtype)
-        # Boolean columns (from enum_to_bool)
-        elif dtype == pl.Boolean:
-            expr = self._boolean_to_str(col)
-        # Enum columns
-        elif isinstance(dtype, pl.Enum):
-            expr = self._enum_to_str(col)
-        # Date/Datetime columns
-        elif dtype == pl.Date:
-            expr = self._date_to_str(col)
-        elif isinstance(dtype, pl.Datetime):
-            expr = self._datetime_to_str(col)
-        # List columns
-        elif isinstance(dtype, pl.List):
-            expr = self._list_to_str(col, dtype.inner)
-        # Array columns
-        elif isinstance(dtype, pl.Array):
-            expr = self._array_to_str(col, dtype)
-        # Numeric columns
-        elif dtype.is_float():
-            expr = self._float_to_str(col)
-        elif dtype.is_integer():
-            expr = self._int_to_str(col)
-        # String columns (no-op, but handle normalization)
-        elif dtype == pl.Utf8:
-            expr = col
-        else:
-            # Default: cast to string
-            expr = col.cast(pl.Utf8)
+        # For float types, pass ESD information
+        if type_code == "float" and has_esd:
+            return self.float_with_esd(col)
+        elif type_code == "float-range" and has_esd:
+            return self.float_range_with_esd(col)
 
+        return stringifier(col)
+
+    def _finalize(self, expr: pl.Expr, col: str) -> pl.Expr:
+        """Apply final null handling and alias."""
         if self._null_to_dot:
             expr = expr.fill_null(self._nan_string)
+        return expr.alias(col)
 
-        return StringifyPlan(
-            expr=expr.alias(col_name),
-            output_name=col_name,
-            consumes=tuple(consumes),
-        )
+    # ========== Type-specific stringifiers ==========
 
-    def _boolean_to_str(self, col: pl.Expr) -> pl.Expr:
-        """Convert boolean column to string."""
-        return (
-            pl.when(col.is_null())
+    def any(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'any' type: cast to string, NaN → '.'."""
+        expr = pl.col(col).cast(pl.Utf8)
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
+    def boolean(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'boolean' type using bool_true/bool_false."""
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
             .then(None)
-            .when(col)
+            .when(c)
             .then(pl.lit(self._bool_true))
             .otherwise(pl.lit(self._bool_false))
         )
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
 
-    def _enum_to_str(self, col: pl.Expr) -> pl.Expr:
-        """Convert Enum column back to plain string."""
-        # Empty string category ("") becomes null
-        return (
-            pl.when(col.cast(pl.Utf8) == "")
+    def bool_enum(self, col: str) -> list[StringifyPlan]:
+        """Stringify boolean-like enum using enum_true/enum_false."""
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
             .then(None)
-            .otherwise(col.cast(pl.Utf8))
+            .when(c)
+            .then(pl.lit(self._enum_true))
+            .otherwise(pl.lit(self._enum_false))
         )
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
 
-    def _date_to_str(self, col: pl.Expr) -> pl.Expr:
-        """Convert Date column to string in CIF format."""
-        return col.dt.strftime(self._date_format)
+    def date_dep(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'date_dep' type: date → string."""
+        expr = pl.col(col).dt.strftime(self._date_format)
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
 
-    def _datetime_to_str(self, col: pl.Expr) -> pl.Expr:
-        """Convert Datetime column to string in CIF format."""
-        return col.dt.strftime(self._datetime_format)
+    def entity_id_list(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'entity_id_list' type: list → comma-separated."""
+        return self._list_to_delimited(col, self._list_delimiter)
 
-    def _list_to_str(self, col: pl.Expr, inner_dtype: pl.DataType) -> pl.Expr:
-        """Convert List column to delimited string."""
-        # For list of strings or numbers, join with delimiter
-        # Empty list becomes "."
-        return (
-            pl.when(col.is_null())
+    def float(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'float' type without ESD: float → string, NaN → '.'."""
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
             .then(None)
-            .when(col.list.len() == 0)
+            .when(c.is_nan())
             .then(pl.lit(self._nan_string))
-            .otherwise(
-                col.list.eval(pl.element().cast(pl.Utf8))
-                .list.join(self._list_delimiter)
-            )
+            .otherwise(c.cast(pl.Utf8))
         )
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
 
-    def _array_to_str(self, col: pl.Expr, dtype: pl.Array) -> pl.Expr:
-        """Convert Array column to range string format.
-
-        For 2-element arrays (ranges), outputs "min-max" format.
-        """
-        # For int-range or float-range (2-element arrays)
-        if dtype.size == 2:
-            # Extract elements and format as "min-max"
-            first = col.arr.get(0).cast(pl.Utf8)
-            second = col.arr.get(1).cast(pl.Utf8)
-            return (
-                pl.when(col.is_null())
-                .then(None)
-                # Check if it's all NaN (for float) -> "."
-                .when(
-                    col.arr.get(0).is_nan() & col.arr.get(1).is_nan()
-                    if dtype.inner.is_float()
-                    else pl.lit(False)
-                )
-                .then(pl.lit(self._nan_string))
-                # If both elements are the same, output single value
-                .when(first == second)
-                .then(first)
-                # Otherwise output "min-max"
-                .otherwise(pl.concat_str([first, pl.lit("-"), second]))
-            )
-        # For other arrays, join with comma
-        return col.cast(pl.List(dtype.inner)).list.join(self._list_delimiter)
-
-    def _float_to_str(self, col: pl.Expr) -> pl.Expr:
-        """Convert float column to string, handling NaN."""
-        return (
-            pl.when(col.is_null())
-            .then(None)
-            .when(col.is_nan())
-            .then(pl.lit(self._nan_string))
-            .otherwise(col.cast(pl.Utf8))
-        )
-
-    def _int_to_str(self, col: pl.Expr) -> pl.Expr:
-        """Convert integer column to string."""
-        return col.cast(pl.Utf8)
-
-    def _merge_float_with_esd(
-        self,
-        main_col: str,
-        esd_col: str,
-        dtype: pl.DataType,
-    ) -> pl.Expr:
-        """Merge float column with its ESD column back to parenthesized notation.
-
-        Converts float value + integer ESD digits back to "value(esd)" string format.
-        For example: 1.234 + 5 -> "1.234(5)"
-
-        The ESD digits represent uncertainty in the last digits of the mantissa.
-        To reconstruct the original string:
-        1. Format the float value
-        2. If ESD is not null, append "(<esd_digits>)"
-        """
-        main = pl.col(main_col)
+    def float_with_esd(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'float' type with ESD: merge float + ESD → 'value(esd)'."""
+        esd_col = f"{col}{self._esd_col_suffix}"
+        main = pl.col(col)
         esd = pl.col(esd_col)
-
-        # Handle arrays (float-range)
-        if isinstance(dtype, pl.Array):
-            return self._merge_float_array_with_esd(main_col, esd_col, dtype)
 
         # Format float to string
         float_str = (
@@ -274,8 +245,12 @@ class Stringifier:
         )
 
         # Add ESD in parentheses if present
-        return (
-            pl.when(esd.is_null())
+        expr = (
+            pl.when(main.is_null())
+            .then(None)
+            .when(main.is_nan())
+            .then(pl.lit(self._nan_string))
+            .when(esd.is_null())
             .then(float_str)
             .otherwise(
                 pl.concat_str([
@@ -287,21 +262,52 @@ class Stringifier:
             )
         )
 
-    def _merge_float_array_with_esd(
-        self,
-        main_col: str,
-        esd_col: str,
-        dtype: pl.Array,
-    ) -> pl.Expr:
-        """Merge float array with ESD array back to range string.
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col, esd_col),
+        )]
 
-        For float-range: converts [1.234, 5.678] + [5, 10] -> "1.234(5)-5.678(10)"
-        """
-        main = pl.col(main_col)
+    def float_range(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'float-range' type without ESD: array → 'min-max'."""
+        c = pl.col(col)
+
+        first = c.arr.get(0)
+        second = c.arr.get(1)
+        first_str = first.cast(pl.Utf8)
+        second_str = second.cast(pl.Utf8)
+
+        expr = (
+            pl.when(c.is_null())
+            .then(None)
+            .when(first.is_nan() & second.is_nan())
+            .then(pl.lit(self._nan_string))
+            # If both elements are the same, output single value
+            .when(first == second)
+            .then(first_str)
+            # Otherwise output "min-max"
+            .otherwise(pl.concat_str([first_str, pl.lit("-"), second_str]))
+        )
+
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
+    def float_range_with_esd(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'float-range' type with ESD: arrays → 'val1(esd1)-val2(esd2)'."""
+        esd_col = f"{col}{self._esd_col_suffix}"
+        main = pl.col(col)
         esd = pl.col(esd_col)
 
+        first_val = main.arr.get(0)
+        second_val = main.arr.get(1)
+        first_esd = esd.arr.get(0)
+        second_esd = esd.arr.get(1)
+
+        # Format single element with optional ESD
         def format_element(val: pl.Expr, unc: pl.Expr) -> pl.Expr:
-            """Format a single value with optional uncertainty."""
             val_str = val.cast(pl.Utf8)
             return (
                 pl.when(unc.is_null())
@@ -316,22 +322,147 @@ class Stringifier:
                 )
             )
 
-        first_val = main.arr.get(0)
-        second_val = main.arr.get(1)
-        first_esd = esd.arr.get(0)
-        second_esd = esd.arr.get(1)
-
         first_str = format_element(first_val, first_esd)
         second_str = format_element(second_val, second_esd)
 
-        return (
+        expr = (
             pl.when(main.is_null())
             .then(None)
             .when(first_val.is_nan() & second_val.is_nan())
             .then(pl.lit(self._nan_string))
             # If both values and ESDs are the same, output single value
-            .when((first_val == second_val) & (first_esd == second_esd))
+            .when(
+                (first_val == second_val) &
+                ((first_esd.is_null() & second_esd.is_null()) | (first_esd == second_esd))
+            )
             .then(first_str)
             # Otherwise output "val1(esd1)-val2(esd2)"
             .otherwise(pl.concat_str([first_str, pl.lit("-"), second_str]))
         )
+
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col, esd_col),
+        )]
+
+    def id_list(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'id_list' type: list → comma-separated."""
+        return self._list_to_delimited(col, self._list_delimiter)
+
+    def id_list_spc(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'id_list_spc' type: list → space-separated."""
+        return self._list_to_delimited(col, " ")
+
+    def int(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'int' type: integer → string."""
+        expr = pl.col(col).cast(pl.Utf8)
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
+    def int_range(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'int-range' type: array → 'min-max'."""
+        c = pl.col(col)
+
+        first = c.arr.get(0)
+        second = c.arr.get(1)
+        first_str = first.cast(pl.Utf8)
+        second_str = second.cast(pl.Utf8)
+
+        # Check if both elements are null (for "." case)
+        both_null = first.is_null() & second.is_null()
+
+        expr = (
+            pl.when(c.is_null())
+            .then(None)
+            .when(both_null)
+            .then(pl.lit(self._nan_string))
+            # If both elements are the same, output single value
+            .when(first == second)
+            .then(first_str)
+            # Otherwise output "min-max"
+            .otherwise(pl.concat_str([first_str, pl.lit("-"), second_str]))
+        )
+
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
+    def int_list(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'int_list' type: list of integers → comma-separated."""
+        return self._list_to_delimited(col, self._list_delimiter)
+
+    def seq_one_letter_code(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'seq-one-letter-code' type: string passthrough."""
+        return self.any(col)
+
+    def sequence_dep(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'sequence_dep' type: string passthrough."""
+        return self.any(col)
+
+    def symmetry_operation(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'symmetry_operation' type: list → comma-separated."""
+        return self._list_to_delimited(col, self._list_delimiter)
+
+    def ucode_alphanum_csv(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'ucode-alphanum-csv' type: list → comma-separated."""
+        return self._list_to_delimited(col, self._list_delimiter)
+
+    def yyyy_mm_dd(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'yyyy-mm-dd' type: date → string."""
+        return self.date_dep(col)
+
+    def yyyy_mm_dd_hh_mm(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'yyyy-mm-dd:hh:mm' type: datetime → string."""
+        expr = pl.col(col).dt.strftime(self._datetime_format)
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
+    def yyyy_mm_dd_hh_mm_flex(self, col: str) -> list[StringifyPlan]:
+        """Stringify 'yyyy-mm-dd:hh:mm-flex' type: datetime → string."""
+        return self.yyyy_mm_dd_hh_mm(col)
+
+    def enum(self, col: str) -> list[StringifyPlan]:
+        """Stringify Enum column: convert back to plain string."""
+        c = pl.col(col)
+        # Empty string category ("") becomes null
+        expr = (
+            pl.when(c.cast(pl.Utf8) == "")
+            .then(None)
+            .otherwise(c.cast(pl.Utf8))
+        )
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
+    # ========== Helper methods ==========
+
+    def _list_to_delimited(self, col: str, delimiter: str) -> list[StringifyPlan]:
+        """Convert List column to delimited string."""
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
+            .then(None)
+            .when(c.list.len() == 0)
+            .then(pl.lit(self._nan_string))
+            .otherwise(
+                c.list.eval(pl.element().cast(pl.Utf8))
+                .list.join(delimiter)
+            )
+        )
+        return [StringifyPlan(
+            expr=self._finalize(expr, col),
+            output_name=col,
+            consumes=(col,),
+        )]
+
