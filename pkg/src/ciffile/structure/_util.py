@@ -423,6 +423,7 @@ def extract_files(
 def validate_content_df(
     content: DataFrameLike,
     *,
+    allow_duplicate_rows: bool = False,
     require_block: bool = True,
     require_frame: bool = False,
     require_category: bool = True,
@@ -445,6 +446,11 @@ def validate_content_df(
         - `col_name_cat` (str | None): Data category of the data item.
         - `col_name_key` (str): Data keyword of the data item.
         - `col_name_values` (List[str]): List of UTF-8 strings representing the data values.
+    allow_duplicate_rows
+        If True, rows with the same (block, frame, category, key) identity
+        will have their values concatenated instead of raising a duplicate error.
+        This is useful for programmatic input where data is provided
+        one-row-per-value instead of one-row-per-item.
     require_*
         Whether the corresponding column is required to be present.
     col_name_*
@@ -482,8 +488,23 @@ def validate_content_df(
                 col_name_key: pl.Utf8,
                 col_name_values: pl.List(pl.Utf8),
             }
+            # Fast path: let Polars handle common types
             return pl.DataFrame(obj, schema_overrides=schema, strict=False)
         except Exception as e:  # pragma: no cover
+            # Fallback: if input is a pandas DataFrame and pyarrow is unavailable,
+            # polars will raise: ImportError: pyarrow is required for converting a pandas dataframe to Polars,
+            #                    unless each of its columns is a simple numpy-backed one.
+            # Construct a Polars DataFrame via a plain dict of lists.
+            try:
+                import pandas as pd  # type: ignore
+            except Exception:
+                pd = None  # type: ignore
+            if pd is not None and isinstance(obj, pd.DataFrame):  # type: ignore[arg-type]
+                data_dict = {k: list(v) for k, v in obj.items()}
+                try:
+                    return pl.DataFrame(data_dict, schema_overrides=schema, strict=False)
+                except Exception as ee:
+                    raise ValueError(f"Could not convert 'content' to a Polars DataFrame: {ee}") from ee
             raise ValueError(f"Could not convert 'content' to a Polars DataFrame: {e}") from e
 
     def _require_columns(df: pl.DataFrame, cols: list[str]) -> None:
@@ -541,6 +562,28 @@ def validate_content_df(
         df = df.with_columns(exprs)
     except Exception as e:
         raise ValueError(f"Failed to convert column dtypes as expected: {e}") from e
+
+    # -------------------------
+    # Coalesce duplicate (block, frame, category, key) rows by concatenating values
+    # This allows inputs provided as one-row-per-value to be ingested.
+    # -------------------------
+    id_cols: list[str] = [
+        c
+        for c in (col_name_block, col_name_frame, col_name_cat, col_name_key)
+        if c is not None and c in df.columns
+    ]
+    if allow_duplicate_rows and id_cols:
+        df = (
+            df
+            .with_row_index("_row")
+            .sort("_row")
+            .group_by(id_cols, maintain_order=True)
+            .agg(pl.col(col_name_values).alias(col_name_values))
+            .with_columns(
+                pl.col(col_name_values)
+                .map_elements(lambda x: [e for sub in x for e in sub], return_dtype=pl.List(pl.Utf8))
+            )
+        )
 
     # -------------------------
     # Null / shape validation
@@ -606,12 +649,6 @@ def validate_content_df(
     # Duplicate row validation based on identity codes
     # (block, frame, category, key) that are provided
     # -------------------------
-    id_cols: list[str] = [
-        c
-        for c in (col_name_block, col_name_frame, col_name_cat, col_name_key)
-        if c is not None and c in df.columns
-    ]
-
     if id_cols:
         df_idx = df.with_row_index("_row")
         dups = (
