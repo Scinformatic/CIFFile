@@ -251,6 +251,35 @@ class TestCIFCreator:
         # Should handle empty values appropriately
         assert isinstance(cif, CIFFile)
 
+    def test_create_rejects_duplicates_by_default(self) -> None:
+        """Duplicate rows should raise unless explicitly allowed."""
+        data = {
+            "block": ["b1", "b1"],
+            "category": ["cat1", "cat1"],
+            "keyword": ["key1", "key1"],
+            "values": [["a"], ["b"]],
+        }
+
+        with pytest.raises(ValueError):
+            ciffile.create(data, variant="mmcif", validate=True)
+
+    def test_create_allows_duplicate_rows_when_opted_in(self) -> None:
+        """Duplicate rows can be aggregated when allow_duplicate_rows=True."""
+        data = {
+            "block": ["b1", "b1"],
+            "category": ["cat1", "cat1"],
+            "keyword": ["key1", "key1"],
+            "values": [["a"], ["b"]],
+        }
+
+        cif = ciffile.create(data, variant="mmcif", allow_duplicate_rows=True)
+
+        block = cif[0]
+        cat = block["cat1"]
+        # Aggregated duplicate rows should produce two values in order
+        assert cat.df.shape[0] == 2
+        assert cat.df["key1"].to_list() == ["a", "b"]
+
     def test_create_roundtrip(self, sample_mmcif_content: str) -> None:
         """Test that create can reconstruct a file from read output.
 
