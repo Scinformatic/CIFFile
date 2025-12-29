@@ -86,7 +86,7 @@ class Caster:
     def __init__(
         self,
         *,
-        esd_col_suffix: str = "_esd",
+        esd_col_suffix: str = "_esd_digits",
         dtype_float: DataTypeLike = pl.Float64,
         dtype_int: DataTypeLike = pl.Int64,
         cast_strict: bool = True,
