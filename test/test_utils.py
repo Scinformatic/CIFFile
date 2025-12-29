@@ -40,7 +40,8 @@ class TestHelperFunctions:
 
     def test_normalize_whitespace_expression(self) -> None:
         """Test getting normalization expression."""
-        expr = normalize_whitespace("col_name", df=None)
+        import polars as pl
+        expr = normalize_whitespace(pl.col("col_name"), df=None)
 
         assert isinstance(expr, pl.Expr)
 
