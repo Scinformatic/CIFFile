@@ -172,6 +172,9 @@ class CIFDataCategory(CIFStructureWithItem[CIFDataItem]):
         if self._variant == "mmcif":
             # Set column names to full data names
             df = df.select(pl.all().name.prefix(f"_{self._code}."))
+        else:
+            # CIF1: prefix column names with underscore only
+            df = df.select(pl.all().name.prefix("_"))
         write_category(
             df,
             writer,
