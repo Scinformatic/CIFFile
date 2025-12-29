@@ -666,6 +666,7 @@ class CIFStructureWithCategory(CIFStructureWithItem[ElementType]):
         col_name_cat: str,
         col_name_key: str,
         col_name_values: str,
+        allow_duplicate_rows: bool = False,
         **kwargs,
     ) -> None:
         if validate:
@@ -673,6 +674,7 @@ class CIFStructureWithCategory(CIFStructureWithItem[ElementType]):
                 content,
                 require_block=require_block,
                 require_frame=require_frame,
+                allow_duplicate_rows=allow_duplicate_rows,
                 col_name_block=col_name_block,
                 col_name_frame=col_name_frame,
                 col_name_cat=col_name_cat,
@@ -698,6 +700,7 @@ class CIFStructureWithCategory(CIFStructureWithItem[ElementType]):
         self._col_cat = col_name_cat
         self._col_key = col_name_key
         self._col_values = col_name_values
+    self._allow_duplicate_rows = allow_duplicate_rows
 
         self._filetype = filetype
         return
@@ -792,6 +795,7 @@ class CIFStructureWithFrame(CIFStructureWithCategory[ElementType]):
         col_name_cat: str | None = None,
         col_name_key: str | None = None,
         col_name_values: str | None = None,
+        allow_duplicate_rows: bool | None = None,
     ) -> Self:
         """Create a new object of the same type as this CIF structure.
 
@@ -833,6 +837,7 @@ class CIFStructureWithFrame(CIFStructureWithCategory[ElementType]):
             col_name_cat=col_name_cat if col_name_cat is not None else self._col_cat,
             col_name_key=col_name_key if col_name_key is not None else self._col_key,
             col_name_values=col_name_values if col_name_values is not None else self._col_values,
+            allow_duplicate_rows=allow_duplicate_rows if allow_duplicate_rows is not None else self._allow_duplicate_rows,
         )
 
     def part(
