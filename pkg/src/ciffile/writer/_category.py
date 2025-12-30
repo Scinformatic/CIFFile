@@ -6,6 +6,10 @@ from typing import Literal, Sequence, Callable, overload
 
 import polars as pl
 
+__all__ = [
+    "write",
+]
+
 
 @overload
 def write(
