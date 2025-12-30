@@ -311,6 +311,7 @@ class DDL2Validator(CIFFileValidator):
             for block_category in block:
                 self._curr_category_code = block_category.code
                 self._validate_category(block_category)
+
         return pl.DataFrame(self._errs)
 
     def values_to_str(
@@ -332,7 +333,7 @@ class DDL2Validator(CIFFileValidator):
         nan_float: Literal[".", "?"] = ".",
         drop_esd_columns: bool = True,
         uchar_case_normalization: Literal["lower", "upper"] | None = None,
-    ) -> None:
+    ) -> pl.DataFrame:
         """Convert typed DataFrame columns back to CIF string format.
 
         This method reverses the data type transformations performed by `validate()`,
@@ -398,6 +399,19 @@ class DDL2Validator(CIFFileValidator):
             If "upper", all string values are converted to uppercase.
             If `None` (default), no case normalization is performed.
 
+        Returns
+        -------
+        validation_errors
+            DataFrame of validation errors.
+            Each row corresponds to a validation error,
+            with the following columns:
+            - "type": Type of validation error; one of:
+              - "undefined_item": Data item is not defined in the dictionary.
+            - "block": Data block code where the error occurred, or `null` if not applicable.
+            - "frame": Data frame code where the error occurred, or `null` if not applicable.
+            - "category": Data category code where the error occurred, or `null` if not applicable.
+            - "item": Data item name where the error occurred, or `null` if not applicable.
+
         Notes
         -----
         The reverse transformations are determined by DDL2 type code:
@@ -430,7 +444,6 @@ class DDL2Validator(CIFFileValidator):
         self._stringify_enum_bool_set = self._stringify_enum_true_set | self._stringify_enum_false_set
         self._stringify_drop_esd_columns = drop_esd_columns
         self._stringify_uchar_case_normalization = uchar_case_normalization
-
         self._stringifier = Stringifier(
             esd_col_suffix=self._stringify_esd_col_suffix,
             bool_true=bool_true,
@@ -444,19 +457,25 @@ class DDL2Validator(CIFFileValidator):
             empty_str=empty_str,
             nan_float=nan_float,
         )
+        self._errs = []
 
         if file.container_type == "category":
             self._stringify_category(file)
-            return
+            return pl.DataFrame(self._errs)
 
         blocks: list[CIFBlock] = [file] if file.container_type == "block" else file
         for block in blocks:
+            self._curr_block_code = block.code
             for frame in block.frames:
+                self._curr_frame_code = frame.code
                 for frame_category in frame:
+                    self._curr_category_code = frame_category.code
                     self._stringify_category(frame_category)
             for block_category in block:
+                self._curr_category_code = block_category.code
                 self._stringify_category(block_category)
-        return
+
+        return pl.DataFrame(self._errs)
 
     def _stringify_category(self, cat: CIFDataCategory) -> None:
         """Convert a single category's DataFrame back to CIF string format."""
@@ -464,11 +483,13 @@ class DDL2Validator(CIFFileValidator):
         category = cat.code
 
         # Get item definitions for this category
-        item_defs = {
-            name: item_def
-            for name, item_def in self._dict["item"].items()
-            if item_def.get("category") == category
-        }
+        item_defs = {}
+        for data_item in cat:
+            itemdef = self["item"].get(data_item.name)
+            if itemdef is None and not data_item.name.endswith(self._stringify_esd_col_suffix):
+                self._err("undefined_item", item=data_item.code)
+            else:
+                item_defs[data_item.code] = itemdef
 
         exprs: list[pl.Expr] = []
         columns_to_drop: set[str] = set()
@@ -483,14 +504,14 @@ class DDL2Validator(CIFFileValidator):
                 continue
 
             # Find item definition
-            item_def = item_defs.get(col_name)
+            item_def = item_defs.get(col_name, {})
             esd_col_name = f"{col_name}{self._stringify_esd_col_suffix}"
             has_esd = esd_col_name in df.columns
 
             # Determine type code and primitive
-            type_code = item_def.get("type", "any") if item_def else "any"
+            type_code = item_def.get("type", "any")
             # type_primitive is stored on the item definition after preprocessing
-            type_prim = item_def.get("type_primitive", "char") if item_def else "char"
+            type_prim = item_def.get("type_primitive", "char")
 
             # Get column dtype
             col_dtype = df.schema.get(col_name)
@@ -589,9 +610,7 @@ class DDL2Validator(CIFFileValidator):
             else:
                 item_defs[data_item.code] = itemdef
 
-        self._curr_item_defs = {
-            k: v for k, v in item_defs.items() if k in cat.df.columns
-        }
+        self._curr_item_defs = item_defs
 
         cat.df = self._validate_items(cat.df)
 
