@@ -85,6 +85,16 @@ class DDL2Validator(CIFFileValidator):
         self._enum_true: set[str] = {"yes", "y", "true"}
         self._enum_false: set[str] = {"no", "n", "false"}
         self._errs: list[dict[str, Any]] = []
+
+        # Parameters for `self.values_to_str()`;
+        # these are re-set on each call to that method.
+        self._stringify_esd_col_suffix: str = "_esd_digits"
+        self._stringify_enum_true_set: set[str] = set()
+        self._stringify_enum_false_set: set[str] = set()
+        self._stringify_enum_bool_set: set[str] = set()
+        self._stringify_drop_esd_columns: bool = True
+        self._stringify_uchar_case_normalization: Literal["lower", "upper"] | None = None
+        self._stringifier: Stringifier = Stringifier()
         return
 
     def validate(
@@ -314,8 +324,12 @@ class DDL2Validator(CIFFileValidator):
         enum_false: Sequence[str] = ("no", "n", "false"),
         date_format: str = "%Y-%m-%d",
         datetime_format: str = "%Y-%m-%d:%H:%M",
-        nan_string: str = ".",
-        null_to_dot: bool = False,
+        null_str: Literal[".", "?"] = "?",
+        null_float: Literal[".", "?"] = "?",
+        null_int: Literal[".", "?"] = "?",
+        null_bool: Literal[".", "?"] = "?",
+        empty_str: Literal[".", "?"] = ".",
+        nan_float: Literal[".", "?"] = ".",
         drop_esd_columns: bool = True,
         uchar_case_normalization: Literal["lower", "upper"] | None = None,
     ) -> None:
@@ -362,13 +376,19 @@ class DDL2Validator(CIFFileValidator):
         datetime_format
             Format string for datetime output (strftime format).
             Default is "%Y-%m-%d:%H:%M" for "yyyy-mm-dd:hh:mm" format.
-        nan_string
-            String to use for NaN float values.
+        null_str
+            Symbol for null string values. Default is "?" (CIF unknown value).
+        null_float
+            Symbol for null float values. Default is "?" (CIF unknown value).
+        null_int
+            Symbol for null integer values. Default is "?" (CIF unknown value).
+        null_bool
+            Symbol for null boolean values. Default is "?" (CIF unknown value).
+        empty_str
+            Symbol for empty values (e.g., empty lists, NaN in int-range).
             Default is "." (CIF inapplicable value).
-        null_to_dot
-            Whether to convert null values to "." in the output.
-            If False (default), null values remain null.
-            If True, null values become "." in the output strings.
+        nan_float
+            Symbol for NaN float values. Default is "." (CIF inapplicable value).
         drop_esd_columns
             Whether to drop ESD columns from the output after merging.
             Default is True.
@@ -387,14 +407,14 @@ class DDL2Validator(CIFFileValidator):
           has an enumeration with all values in `enum_true` or `enum_false`.
           Picks a consistent pair of values from the original enumeration
           (e.g., "yes"/"no" rather than "yes"/"n").
-        - **"float"**: Merges with ESD column if present, NaN → ".".
+        - **"float"**: Merges with ESD column if present, NaN → `nan_float`.
         - **"float-range"**: Array → "min-max" or "val(esd)-val(esd)".
-        - **"int"**: Cast to string.
+        - **"int"**: Cast to string, null → `null_int`.
         - **"int-range"**: Array → "min-max".
         - **"id_list", "entity_id_list", etc.**: List → comma-separated.
         - **"id_list_spc"**: List → space-separated.
         - **Date/datetime types**: Formatted per `date_format`/`datetime_format`.
-        - **Enum columns**: Converted to plain strings, empty → null.
+        - **Enum columns**: Converted to plain strings, empty → `empty_str`.
         - **"uchar" primitive**: Case normalized per `uchar_case_normalization`.
 
         Examples
@@ -405,17 +425,25 @@ class DDL2Validator(CIFFileValidator):
         >>> validator.values_to_str(category)
         """
         self._stringify_esd_col_suffix = esd_col_suffix
-        self._stringify_bool_true = bool_true
-        self._stringify_bool_false = bool_false
         self._stringify_enum_true_set = {v.lower() for v in enum_true}
         self._stringify_enum_false_set = {v.lower() for v in enum_false}
         self._stringify_enum_bool_set = self._stringify_enum_true_set | self._stringify_enum_false_set
-        self._stringify_date_format = date_format
-        self._stringify_datetime_format = datetime_format
-        self._stringify_nan_string = nan_string
-        self._stringify_null_to_dot = null_to_dot
         self._stringify_drop_esd_columns = drop_esd_columns
         self._stringify_uchar_case_normalization = uchar_case_normalization
+
+        self._stringifier = Stringifier(
+            esd_col_suffix=self._stringify_esd_col_suffix,
+            bool_true=bool_true,
+            bool_false=bool_false,
+            date_format=date_format,
+            datetime_format=datetime_format,
+            null_str=null_str,
+            null_float=null_float,
+            null_int=null_int,
+            null_bool=null_bool,
+            empty_str=empty_str,
+            nan_float=nan_float,
+        )
 
         if file.container_type == "category":
             self._stringify_category(file)
@@ -432,16 +460,6 @@ class DDL2Validator(CIFFileValidator):
 
     def _stringify_category(self, cat: CIFDataCategory) -> None:
         """Convert a single category's DataFrame back to CIF string format."""
-        stringifier = Stringifier(
-            esd_col_suffix=self._stringify_esd_col_suffix,
-            bool_true=self._stringify_bool_true,
-            bool_false=self._stringify_bool_false,
-            date_format=self._stringify_date_format,
-            datetime_format=self._stringify_datetime_format,
-            nan_string=self._stringify_nan_string,
-            null_to_dot=self._stringify_null_to_dot,
-        )
-
         df = cat.df
         category = cat.code
 
@@ -502,10 +520,10 @@ class DDL2Validator(CIFFileValidator):
             # Check if this column has an Enum dtype (non-bool enum)
             if isinstance(col_dtype, pl.Enum):
                 # Use enum stringifier for Enum dtype columns
-                plans = stringifier.enum(col_name)
+                plans = self._stringifier.enum(col_name)
             elif bool_enum_true_val is not None and bool_enum_false_val is not None:
                 # Use bool_enum stringification with values from enumeration
-                plans = stringifier(
+                plans = self._stringifier(
                     col_name,
                     type_code,
                     has_esd=has_esd,
@@ -514,7 +532,7 @@ class DDL2Validator(CIFFileValidator):
                 )
             else:
                 # Use type-code-based dispatch
-                plans = stringifier(
+                plans = self._stringifier(
                     col_name,
                     type_code,
                     has_esd=has_esd,
