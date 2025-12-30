@@ -48,10 +48,18 @@ class Stringifier:
         Format string for date output (strftime format).
     datetime_format
         Format string for datetime output (strftime format).
-    nan_string
-        String to use for NaN values (typically ".").
-    null_to_dot
-        Whether to convert null values to "." in the output.
+    null_str
+        Symbol to use for null values in string columns.
+    null_float
+        Symbol to use for null values in floating-point columns.
+    null_int
+        Symbol to use for null values in integer columns.
+    null_bool
+        Symbol to use for null values in boolean columns.
+    empty_str
+        Symbol to use for empty strings in string columns.
+    nan_float
+        Symbol to use for NaN values in floating-point columns.
     """
 
     def __init__(
@@ -62,16 +70,24 @@ class Stringifier:
         bool_false: str = "NO",
         date_format: str = "%Y-%m-%d",
         datetime_format: str = "%Y-%m-%d:%H:%M",
-        nan_string: str = ".",
-        null_to_dot: bool = False,
+        null_str: Literal[".", "?"] = "?",
+        null_float: Literal[".", "?"] = "?",
+        null_int: Literal[".", "?"] = "?",
+        null_bool: Literal[".", "?"] = "?",
+        empty_str: Literal[".", "?"] = ".",
+        nan_float: Literal[".", "?"] = ".",
     ) -> None:
         self._esd_col_suffix = esd_col_suffix
         self._bool_true = bool_true
         self._bool_false = bool_false
         self._date_format = date_format
         self._datetime_format = datetime_format
-        self._nan_string = nan_string
-        self._null_to_dot = null_to_dot
+        self._null_str = null_str
+        self._null_float = null_float
+        self._null_int = null_int
+        self._null_bool = null_bool
+        self._empty_str = empty_str
+        self._nan_float = nan_float
 
         # Map DDL2 type codes to stringifier methods (mirrors Caster._type_to_caster)
         self._type_to_stringifier = {
@@ -141,19 +157,21 @@ class Stringifier:
 
         return stringifier(col)
 
-    def _finalize(self, expr: pl.Expr, col: str) -> pl.Expr:
-        """Apply final null handling and alias."""
-        if self._null_to_dot:
-            expr = expr.fill_null(self._nan_string)
-        return expr.alias(col)
-
     # ========== Type-specific stringifiers ==========
 
     def any(self, col: str) -> list[StringifyPlan]:
-        """Stringify 'any' type: cast to string, NaN → '.'."""
-        expr = pl.col(col).cast(pl.Utf8)
+        """Stringify 'any' type: cast to string, null → null_str, empty → empty_str."""
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
+            .then(pl.lit(self._null_str))
+            .when(c == "")
+            .then(pl.lit(self._empty_str))
+            .otherwise(c.cast(pl.Utf8))
+            .alias(col)
+        )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -163,13 +181,14 @@ class Stringifier:
         c = pl.col(col)
         expr = (
             pl.when(c.is_null())
-            .then(None)
+            .then(pl.lit(self._null_bool))
             .when(c)
             .then(pl.lit(self._bool_true))
             .otherwise(pl.lit(self._bool_false))
+            .alias(col)
         )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -179,22 +198,29 @@ class Stringifier:
         c = pl.col(col)
         expr = (
             pl.when(c.is_null())
-            .then(None)
+            .then(pl.lit(self._null_bool))
             .when(c)
             .then(pl.lit(true_val))
             .otherwise(pl.lit(false_val))
+            .alias(col)
         )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
 
     def date_dep(self, col: str) -> list[StringifyPlan]:
         """Stringify 'date_dep' type: date → string."""
-        expr = pl.col(col).dt.strftime(self._date_format)
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
+            .then(pl.lit(self._null_str))
+            .otherwise(c.dt.strftime(self._date_format))
+            .alias(col)
+        )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -204,17 +230,18 @@ class Stringifier:
         return self._list_to_delimited(col, ",")
 
     def float(self, col: str) -> list[StringifyPlan]:
-        """Stringify 'float' type without ESD: float → string, NaN → '.'."""
+        """Stringify 'float' type without ESD: float → string, NaN → nan_float."""
         c = pl.col(col)
         expr = (
             pl.when(c.is_null())
-            .then(None)
+            .then(pl.lit(self._null_float))
             .when(c.is_nan())
-            .then(pl.lit(self._nan_string))
+            .then(pl.lit(self._nan_float))
             .otherwise(c.cast(pl.Utf8))
+            .alias(col)
         )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -226,20 +253,14 @@ class Stringifier:
         esd = pl.col(esd_col)
 
         # Format float to string
-        float_str = (
-            pl.when(main.is_null())
-            .then(None)
-            .when(main.is_nan())
-            .then(pl.lit(self._nan_string))
-            .otherwise(main.cast(pl.Utf8))
-        )
+        float_str = main.cast(pl.Utf8)
 
         # Add ESD in parentheses if present
         expr = (
             pl.when(main.is_null())
-            .then(None)
+            .then(pl.lit(self._null_float))
             .when(main.is_nan())
-            .then(pl.lit(self._nan_string))
+            .then(pl.lit(self._nan_float))
             .when(esd.is_null())
             .then(float_str)
             .otherwise(
@@ -250,10 +271,11 @@ class Stringifier:
                     pl.lit(")"),
                 ])
             )
+            .alias(col)
         )
 
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col, esd_col),
         )]
@@ -269,18 +291,19 @@ class Stringifier:
 
         expr = (
             pl.when(c.is_null())
-            .then(None)
+            .then(pl.lit(self._null_float))
             .when(first.is_nan() & second.is_nan())
-            .then(pl.lit(self._nan_string))
+            .then(pl.lit(self._nan_float))
             # If both elements are the same, output single value
             .when(first == second)
             .then(first_str)
             # Otherwise output "min-max"
             .otherwise(pl.concat_str([first_str, pl.lit("-"), second_str]))
+            .alias(col)
         )
 
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -317,9 +340,9 @@ class Stringifier:
 
         expr = (
             pl.when(main.is_null())
-            .then(None)
+            .then(pl.lit(self._null_float))
             .when(first_val.is_nan() & second_val.is_nan())
-            .then(pl.lit(self._nan_string))
+            .then(pl.lit(self._nan_float))
             # If both values and ESDs are the same, output single value
             .when(
                 (first_val == second_val) &
@@ -328,10 +351,11 @@ class Stringifier:
             .then(first_str)
             # Otherwise output "val1(esd1)-val2(esd2)"
             .otherwise(pl.concat_str([first_str, pl.lit("-"), second_str]))
+            .alias(col)
         )
 
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col, esd_col),
         )]
@@ -346,9 +370,15 @@ class Stringifier:
 
     def int(self, col: str) -> list[StringifyPlan]:
         """Stringify 'int' type: integer → string."""
-        expr = pl.col(col).cast(pl.Utf8)
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
+            .then(pl.lit(self._null_int))
+            .otherwise(c.cast(pl.Utf8))
+            .alias(col)
+        )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -367,18 +397,19 @@ class Stringifier:
 
         expr = (
             pl.when(c.is_null())
-            .then(None)
+            .then(pl.lit(self._null_int))
             .when(both_null)
-            .then(pl.lit(self._nan_string))
+            .then(pl.lit(self._empty_str))
             # If both elements are the same, output single value
             .when(first == second)
             .then(first_str)
             # Otherwise output "min-max"
             .otherwise(pl.concat_str([first_str, pl.lit("-"), second_str]))
+            .alias(col)
         )
 
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -409,9 +440,15 @@ class Stringifier:
 
     def yyyy_mm_dd_hh_mm(self, col: str) -> list[StringifyPlan]:
         """Stringify 'yyyy-mm-dd:hh:mm' type: datetime → string."""
-        expr = pl.col(col).dt.strftime(self._datetime_format)
+        c = pl.col(col)
+        expr = (
+            pl.when(c.is_null())
+            .then(pl.lit(self._null_str))
+            .otherwise(c.dt.strftime(self._datetime_format))
+            .alias(col)
+        )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -423,14 +460,17 @@ class Stringifier:
     def enum(self, col: str) -> list[StringifyPlan]:
         """Stringify Enum column: convert back to plain string."""
         c = pl.col(col)
-        # Empty string category ("") becomes null
+        # Empty string category ("") becomes empty_str symbol
         expr = (
-            pl.when(c.cast(pl.Utf8) == "")
-            .then(None)
+            pl.when(c.is_null())
+            .then(pl.lit(self._null_str))
+            .when(c.cast(pl.Utf8) == "")
+            .then(pl.lit(self._empty_str))
             .otherwise(c.cast(pl.Utf8))
+            .alias(col)
         )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
@@ -442,16 +482,17 @@ class Stringifier:
         c = pl.col(col)
         expr = (
             pl.when(c.is_null())
-            .then(None)
+            .then(pl.lit(self._null_str))
             .when(c.list.len() == 0)
-            .then(pl.lit(self._nan_string))
+            .then(pl.lit(self._empty_str))
             .otherwise(
                 c.list.eval(pl.element().cast(pl.Utf8))
                 .list.join(delimiter)
             )
+            .alias(col)
         )
         return [StringifyPlan(
-            expr=self._finalize(expr, col),
+            expr=expr,
             output_name=col,
             consumes=(col,),
         )]
