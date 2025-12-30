@@ -103,12 +103,7 @@ validator_dict = dictionary_cif.to_validator_dict(variant="ddl2")
 validator = DDL2Validator(validator_dict)
 
 # Validate and cast data
-validated_cif = validator.validate(
-	cif,
-	cast=True,
-	cast_strict=False,
-	add_missing_columns=True,
-)
+validated_cif = validator.validate(cif)
 ```
 
 ## Usage Examples
@@ -285,18 +280,16 @@ dict_file = parts["dict"]
 data_only = cif.part("data")
 ```
 
-### Validation with Type Casting
+
+### Converting Back to Strings
+
+After validating and working with typed data, you can convert columns back to CIF string format for writing:
 
 ```python
-validated = validator.validate(
-	cif,
-	cast=True,  # Cast to appropriate types
-	cast_strict=False,  # Allow lossy conversions
-	add_missing_columns=True,  # Add default values
-	add_category_info=True,  # Add metadata
-	add_item_info=True,  # Add item metadata
-)
+# Convert typed columns back to strings (in-place modification)
+validator.values_to_str(cif)
 ```
+
 
 ## Documentation
 
