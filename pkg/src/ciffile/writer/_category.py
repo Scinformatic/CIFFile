@@ -2,11 +2,41 @@
 
 from __future__ import annotations
 
-from typing import Literal, Sequence, Callable
+from typing import Literal, Sequence, Callable, overload
 
 import polars as pl
 
 
+@overload
+def write(
+    table: pl.DataFrame,
+    writer: None = None,
+    *,
+    # String casting parameters
+    bool_true: str = "YES",
+    bool_false: str = "NO",
+    null_str: Literal[".", "?"] = "?",
+    null_float: Literal[".", "?"] = "?",
+    null_int: Literal[".", "?"] = "?",
+    null_bool: Literal[".", "?"] = "?",
+    empty_str: Literal[".", "?"] = ".",
+    nan_float: Literal[".", "?"] = ".",
+    # Styling parameters
+    always_table: bool = False,
+    list_style: Literal["horizontal", "tabular", "vertical"] = "tabular",
+    table_style: Literal["horizontal", "tabular-horizontal", "tabular-vertical", "vertical"] = "tabular-horizontal",
+    space_items: int = 2,
+    min_space_columns: int = 2,
+    indent: int = 0,
+    indent_inner: int = 0,
+    delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
+    # Non-simple value rules
+    special_start_chars: str = r"""^[_#\$'"\[\]]""",
+    reserved_prefixes: Sequence[str] = ("data_", "save_"),
+    reserved_words: Sequence[str] = ("loop_", "stop_", "global_"),
+) -> str: ...
+
+@overload
 def write(
     table: pl.DataFrame,
     writer: Callable[[str], None],
@@ -33,7 +63,35 @@ def write(
     special_start_chars: str = r"""^[_#\$'"\[\]]""",
     reserved_prefixes: Sequence[str] = ("data_", "save_"),
     reserved_words: Sequence[str] = ("loop_", "stop_", "global_"),
-) -> None:
+) -> None: ...
+
+def write(
+    table: pl.DataFrame,
+    writer: Callable[[str], None] | None = None,
+    *,
+    # String casting parameters
+    bool_true: str = "YES",
+    bool_false: str = "NO",
+    null_str: Literal[".", "?"] = "?",
+    null_float: Literal[".", "?"] = "?",
+    null_int: Literal[".", "?"] = "?",
+    null_bool: Literal[".", "?"] = "?",
+    empty_str: Literal[".", "?"] = ".",
+    nan_float: Literal[".", "?"] = ".",
+    # Styling parameters
+    always_table: bool = False,
+    list_style: Literal["horizontal", "tabular", "vertical"] = "tabular",
+    table_style: Literal["horizontal", "tabular-horizontal", "tabular-vertical", "vertical"] = "tabular-horizontal",
+    space_items: int = 2,
+    min_space_columns: int = 2,
+    indent: int = 0,
+    indent_inner: int = 0,
+    delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
+    # Non-simple value rules
+    special_start_chars: str = r"""^[_#\$'"\[\]]""",
+    reserved_prefixes: Sequence[str] = ("data_", "save_"),
+    reserved_words: Sequence[str] = ("loop_", "stop_", "global_"),
+) -> str | None:
     """Write CIF data category in CIF syntax.
 
     Parameters
@@ -51,6 +109,8 @@ def write(
         to collect the output chunks into the list.
         The whole CIF content can then be obtained by joining the list elements,
         i.e., `''.join(output_list)`.
+        If `None` (default), the function will return
+        the entire CIF content as a single string.
     bool_true
         Symbol to use for boolean `True` values.
     bool_false
@@ -179,8 +239,12 @@ def write(
 
     Returns
     -------
-    None
-        Uses the provided `writer` callable to output the CIF data category.
+    cif_content
+        If `writer` is not provided (i.e., is `None`),
+        the entire CIF content is returned as a single string.
+        Otherwise, the provided `writer` callable
+        is used to output the CIF data category,
+        and `None` is returned.
 
     Raises
     ------
@@ -196,6 +260,13 @@ def write(
         raise ValueError("space_items must be >= 1")
     if min_space_columns < 1:
         raise ValueError("min_space_columns must be >= 1")
+
+    if writer is None:
+        chunks: list[str] = []
+        writer = chunks.append
+        writer_provided = False
+    else:
+        writer_provided = True
 
     cat = _normalize_data_values(
         table,
@@ -348,7 +419,9 @@ def write(
     else:
         raise ValueError(f"Invalid table_style: {table_style!r}")
 
-    return
+    if writer_provided:
+        return None
+    return "".join(chunks)
 
 
 def _normalize_data_values(
