@@ -46,7 +46,7 @@ class CIFFileParseError(Exception):
         *,
         state: State,
         token_idx: int,
-        match: re.Match,
+        match: re.Match | None,
         token_type: Token,
         token_value: str,
         block_code: str | None,
@@ -69,8 +69,8 @@ class CIFFileParseError(Exception):
 
         self.state = state
         self.token_idx = token_idx
-        self.token_start = match.start()
-        self.token_end = match.end()
+        self.token_start = match.start() if match is not None else -1
+        self.token_end = match.end() if match is not None else -1
         self.match = match
 
         self.token_type = token_type
