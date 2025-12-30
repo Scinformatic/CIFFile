@@ -553,3 +553,272 @@ class TestStringifierEdgeCases:
         plans = stringifier("col", "yyyy-mm-dd:hh:mm")
         result = df.with_columns([p.expr for p in plans])
         assert result["col"].to_list() == ["2023-05-20 15:45"]
+
+
+class TestValuesToStrIntegration:
+    """Tests for DDL2Validator.values_to_str() method integration.
+
+    These tests verify that values_to_str works correctly with
+    CIFDataCategory, CIFBlock, and CIFFile objects, modifying them in-place.
+    """
+
+    @pytest.fixture
+    def minimal_dictionary(self) -> dict:
+        """Create a minimal DDL2 dictionary for testing."""
+        return {
+            "title": "Test Dictionary",
+            "description": "Minimal test dictionary",
+            "version": "1.0",
+            "category": {
+                "test_cat": {
+                    "description": "Test category",
+                    "mandatory": False,
+                    "groups": [],
+                    "keys": [],
+                }
+            },
+            "item": {
+                "_test_cat.str_val": {
+                    "category": "test_cat",
+                    "description": "String value",
+                    "mandatory": False,
+                    "type": "any",
+                },
+                "_test_cat.uchar_val": {
+                    "category": "test_cat",
+                    "description": "Case-insensitive string",
+                    "mandatory": False,
+                    "type": "uchar_type",
+                },
+            },
+            "category_group": {},
+            "sub_category": {},
+            "item_type": {
+                "any": {"primitive": "char", "regex": r".*", "detail": None},
+                "uchar_type": {"primitive": "uchar", "regex": r".*", "detail": None},
+            },
+        }
+
+    def test_values_to_str_with_category(self, minimal_dictionary: dict) -> None:
+        """Test values_to_str accepts CIFDataCategory and modifies in-place."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        # Create typed DataFrame (simulating post-validate)
+        df = pl.DataFrame({
+            "_test_cat.str_val": ["hello", "world", None],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        # Call values_to_str - should modify in-place
+        validator.values_to_str(category)
+
+        # Verify in-place modification
+        assert category.df["_test_cat.str_val"].dtype == pl.String
+        assert category.df["_test_cat.str_val"].to_list() == ["hello", "world", None]
+
+    def test_values_to_str_with_int_column(self, minimal_dictionary: dict) -> None:
+        """Test values_to_str correctly converts int columns to strings."""
+        minimal_dictionary["item"]["_test_cat.int_val"] = {
+            "category": "test_cat",
+            "description": "Integer value",
+            "mandatory": False,
+            "type": "int",
+        }
+        minimal_dictionary["item_type"]["int"] = {
+            "primitive": "numb",
+            "regex": r"[+-]?\d+",
+            "detail": None,
+        }
+        validator = DDL2Validator(minimal_dictionary)
+
+        # Create typed DataFrame with int column
+        df = pl.DataFrame({
+            "_test_cat.int_val": pl.Series([1, 2, 3, None], dtype=pl.Int64),
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category)
+
+        assert category.df["_test_cat.int_val"].dtype == pl.String
+        assert category.df["_test_cat.int_val"].to_list() == ["1", "2", "3", None]
+
+    def test_values_to_str_with_boolean_column(self, minimal_dictionary: dict) -> None:
+        """Test values_to_str correctly converts boolean columns to strings."""
+        minimal_dictionary["item"]["_test_cat.bool_val"] = {
+            "category": "test_cat",
+            "description": "Boolean value",
+            "mandatory": False,
+            "type": "boolean",
+        }
+        minimal_dictionary["item_type"]["boolean"] = {
+            "primitive": "uchar",
+            "regex": r"[Yy][Ee][Ss]|[Nn][Oo]",
+            "detail": None,
+        }
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.bool_val": [True, False, None],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, bool_true="YES", bool_false="NO")
+
+        assert category.df["_test_cat.bool_val"].dtype == pl.String
+        assert category.df["_test_cat.bool_val"].to_list() == ["YES", "NO", None]
+
+    def test_values_to_str_with_custom_bool_strings(self, minimal_dictionary: dict) -> None:
+        """Test values_to_str with custom boolean strings."""
+        minimal_dictionary["item"]["_test_cat.bool_val"] = {
+            "category": "test_cat",
+            "description": "Boolean value",
+            "mandatory": False,
+            "type": "boolean",
+        }
+        minimal_dictionary["item_type"]["boolean"] = {
+            "primitive": "uchar",
+            "regex": r".*",
+            "detail": None,
+        }
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.bool_val": [True, False],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, bool_true="TRUE", bool_false="FALSE")
+
+        assert category.df["_test_cat.bool_val"].to_list() == ["TRUE", "FALSE"]
+
+    def test_uchar_case_normalization_lower(self, minimal_dictionary: dict) -> None:
+        """Test uchar_case_normalization='lower' converts to lowercase."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.uchar_val": ["HELLO", "World", "TEST"],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, uchar_case_normalization="lower")
+
+        assert category.df["_test_cat.uchar_val"].to_list() == ["hello", "world", "test"]
+
+    def test_uchar_case_normalization_upper(self, minimal_dictionary: dict) -> None:
+        """Test uchar_case_normalization='upper' converts to uppercase."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.uchar_val": ["hello", "World", "test"],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, uchar_case_normalization="upper")
+
+        assert category.df["_test_cat.uchar_val"].to_list() == ["HELLO", "WORLD", "TEST"]
+
+    def test_uchar_case_normalization_none(self, minimal_dictionary: dict) -> None:
+        """Test uchar_case_normalization=None preserves original case."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.uchar_val": ["HeLLo", "WoRLd", "TeST"],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, uchar_case_normalization=None)
+
+        # Case should be preserved
+        assert category.df["_test_cat.uchar_val"].to_list() == ["HeLLo", "WoRLd", "TeST"]
+
+    def test_uchar_normalization_does_not_affect_char_type(self, minimal_dictionary: dict) -> None:
+        """Test uchar_case_normalization only affects uchar primitive, not char."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.str_val": ["MixedCase", "UPPER", "lower"],
+            "_test_cat.uchar_val": ["MixedCase", "UPPER", "lower"],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, uchar_case_normalization="lower")
+
+        # char type (str_val) should preserve case
+        assert category.df["_test_cat.str_val"].to_list() == ["MixedCase", "UPPER", "lower"]
+        # uchar type (uchar_val) should be lowercased
+        assert category.df["_test_cat.uchar_val"].to_list() == ["mixedcase", "upper", "lower"]
+
+    def test_values_to_str_returns_none(self, minimal_dictionary: dict) -> None:
+        """Test that values_to_str returns None (modifies in-place)."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({"_test_cat.str_val": ["test"]})
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        result = validator.values_to_str(category)
+
+        assert result is None
+
+    def test_null_to_dot_option(self, minimal_dictionary: dict) -> None:
+        """Test null_to_dot=True converts nulls to '.'."""
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.str_val": ["hello", None, "world"],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, null_to_dot=True)
+
+        assert category.df["_test_cat.str_val"].to_list() == ["hello", ".", "world"]
+
+    def test_drop_esd_columns_true(self, minimal_dictionary: dict) -> None:
+        """Test drop_esd_columns=True removes ESD columns."""
+        minimal_dictionary["item"]["_test_cat.float_val"] = {
+            "category": "test_cat",
+            "description": "Float value",
+            "mandatory": False,
+            "type": "float",
+        }
+        minimal_dictionary["item_type"]["float"] = {
+            "primitive": "numb",
+            "regex": r".*",
+            "detail": None,
+        }
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.float_val": [1.234, 5.678],
+            "_test_cat.float_val_esd_digits": [5, None],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, drop_esd_columns=True)
+
+        assert "_test_cat.float_val_esd_digits" not in category.df.columns
+        assert category.df["_test_cat.float_val"].to_list() == ["1.234(5)", "5.678"]
+
+    def test_drop_esd_columns_false(self, minimal_dictionary: dict) -> None:
+        """Test drop_esd_columns=False keeps ESD columns."""
+        minimal_dictionary["item"]["_test_cat.float_val"] = {
+            "category": "test_cat",
+            "description": "Float value",
+            "mandatory": False,
+            "type": "float",
+        }
+        minimal_dictionary["item_type"]["float"] = {
+            "primitive": "numb",
+            "regex": r".*",
+            "detail": None,
+        }
+        validator = DDL2Validator(minimal_dictionary)
+
+        df = pl.DataFrame({
+            "_test_cat.float_val": [1.234, 5.678],
+            "_test_cat.float_val_esd_digits": [5, None],
+        })
+        category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
+
+        validator.values_to_str(category, drop_esd_columns=False)
+
+        assert "_test_cat.float_val_esd_digits" in category.df.columns
