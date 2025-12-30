@@ -20,7 +20,7 @@ namespaces = true
 version = "0.1.0"
 name = "CIFFile"
 description = "A comprehensive Python library for reading, creating, processing, validating, and writing Crystallographic Information Files (CIF/mmCIF)"
-readme = "README.md"
+
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
