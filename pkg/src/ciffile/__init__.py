@@ -34,6 +34,7 @@ from .creator import create
 from .reader import read
 from .structure import CIFFile, CIFBlock, CIFBlockFrames, CIFFrame, CIFDataCategory, CIFDataItem
 from .validation import validator
+from .writer import write
 
 __all__ = [
     "CIFFile",
@@ -45,4 +46,5 @@ __all__ = [
     "create",
     "read",
     "validator",
+    "write",
 ]
