@@ -160,14 +160,23 @@ class Stringifier:
     # ========== Type-specific stringifiers ==========
 
     def any(self, col: str) -> list[StringifyPlan]:
-        """Stringify 'any' type: cast to string, null → null_str, empty → empty_str."""
+        """Stringify 'any' type: cast to string, null → null_str, empty → empty_str.
+
+        This method handles string columns. For non-string columns (like dates),
+        it simply casts to string without empty-string checking.
+        """
         c = pl.col(col)
+        # Build expression that handles null and casts to string
+        # The empty string check is only valid for string types, so we use
+        # a post-cast check instead of pre-cast comparison
         expr = (
             pl.when(c.is_null())
             .then(pl.lit(self._null_str))
-            .when(c == "")
-            .then(pl.lit(self._empty_str))
-            .otherwise(c.cast(pl.Utf8))
+            .otherwise(
+                pl.when(c.cast(pl.Utf8) == "")
+                .then(pl.lit(self._empty_str))
+                .otherwise(c.cast(pl.Utf8))
+            )
             .alias(col)
         )
         return [StringifyPlan(
