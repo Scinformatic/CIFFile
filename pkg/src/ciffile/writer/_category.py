@@ -92,7 +92,7 @@ def write(
     reserved_prefixes: Sequence[str] = ("data_", "save_"),
     reserved_words: Sequence[str] = ("loop_", "stop_", "global_"),
 ) -> str | None:
-    """Write CIF data category in CIF syntax.
+    """Write a CIF data category in CIF format.
 
     Parameters
     ----------
