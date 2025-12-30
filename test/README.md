@@ -6,16 +6,18 @@ This directory contains the comprehensive test suite for the CIFFile package.
 
 ```
 test/
-├── conftest.py              # Pytest configuration and fixtures
-├── pytest.ini               # Pytest settings and markers
-├── test_reader.py           # Tests for CIF file reading
-├── test_creator.py          # Tests for CIF file creation
-├── test_writer.py           # Tests for CIF file writing
-├── test_parser.py           # Tests for CIF parser
-├── test_structure.py        # Tests for CIF structure classes
-├── test_utils.py            # Tests for utility functions
-├── test_integration.py      # Integration tests
-└── README.md                # This file
+├── conftest.py                  # Pytest configuration and fixtures
+├── pytest.ini                   # Pytest settings and markers
+├── test_reader.py               # Tests for CIF file reading
+├── test_creator.py              # Tests for CIF file creation
+├── test_writer.py               # Tests for CIF file writing
+├── test_parser.py               # Tests for CIF parser
+├── test_structure.py            # Tests for CIF structure classes
+├── test_utils.py                # Tests for utility functions
+├── test_integration.py          # Integration tests
+├── test_cif_spec_compliance.py  # CIF specification compliance tests
+├── test_stringifier.py          # Tests for value stringification
+└── README.md                    # This file
 ```
 
 ## Running Tests
@@ -143,6 +145,20 @@ The test suite uses the following markers:
    - Multi-block processing
    - Large file handling
    - Error recovery
+
+8. **CIF Specification Compliance** (`test_cif_spec_compliance.py`)
+   - CIF 1.1 tokenizer regex patterns
+   - Reserved words (data_, save_, loop_, stop_, global_)
+   - Quoted strings (single, double, semicolon text fields)
+   - Comments and whitespace handling
+   - Parser state machine transitions
+   - mmCIF category.keyword naming conventions
+   - Edge cases (empty files, whitespace-only, malformed input)
+
+9. **Stringifier** (`test_stringifier.py`)
+   - Value to string conversion
+   - Type formatting
+   - Quoting and escaping
 
 ## Fixtures
 
