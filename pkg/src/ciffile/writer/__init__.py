@@ -1,10 +1,14 @@
-from typing import Mapping, Literal, TypedDict, overload
+from __future__ import annotations
+
+from typing import Mapping, Literal, TypedDict, overload, TYPE_CHECKING
 
 import polars as pl
 
 from ._category import write as category
-from ciffile.structure import CIFDataCategory
 from ciffile.typing import DataFrameLike
+
+if TYPE_CHECKING:
+    from ciffile.structure import CIFDataCategory
 
 __all__ = [
     "category",
@@ -262,6 +266,8 @@ def write(
         If any multiline string contains a line beginning with ';',
         which cannot be represented exactly as a CIF 1.1 text field.
     """
+    from ciffile.structure import CIFDataCategory
+
     if writer is None:
         chunks: list[str] = []
         writer = chunks.append
