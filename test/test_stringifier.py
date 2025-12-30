@@ -104,7 +104,7 @@ class TestStringifierTypeDispatch:
         df = pl.DataFrame({"col": [True, False, None]})
         plans = stringifier("col", "boolean")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["YES", "NO", None]
+        assert result["col"].to_list() == ["YES", "NO", "?"]
 
     def test_boolean_with_custom_values(self) -> None:
         """Test 'boolean' type with custom true/false strings."""
@@ -112,28 +112,28 @@ class TestStringifierTypeDispatch:
         df = pl.DataFrame({"col": [True, False, None]})
         plans = stringifier("col", "boolean")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["TRUE", "FALSE", None]
+        assert result["col"].to_list() == ["TRUE", "FALSE", "?"]
 
     def test_bool_enum(self, stringifier: Stringifier) -> None:
         """Test boolean-like enum with custom values."""
         df = pl.DataFrame({"col": [True, False, None]})
         plans = stringifier("col", "any", bool_enum_true="y", bool_enum_false="n")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["y", "n", None]
+        assert result["col"].to_list() == ["y", "n", "?"]
 
     def test_int_type(self, stringifier: Stringifier) -> None:
         """Test 'int' type converts to string."""
         df = pl.DataFrame({"col": [1, 2, -3, None]})
         plans = stringifier("col", "int")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1", "2", "-3", None]
+        assert result["col"].to_list() == ["1", "2", "-3", "?"]
 
     def test_float_type_without_esd(self, stringifier: Stringifier) -> None:
         """Test 'float' type without ESD."""
         df = pl.DataFrame({"col": [1.234, float("nan"), None]})
         plans = stringifier("col", "float", has_esd=False)
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.234", ".", None]
+        assert result["col"].to_list() == ["1.234", ".", "?"]
 
     def test_float_type_with_esd(self, stringifier: Stringifier) -> None:
         """Test 'float' type with ESD merging."""
@@ -143,7 +143,7 @@ class TestStringifierTypeDispatch:
         })
         plans = stringifier("col", "float", has_esd=True)
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.234(5)", "5.678", "9.0(10)", None]
+        assert result["col"].to_list() == ["1.234(5)", "5.678", "9.0(10)", "?"]
 
     def test_int_range_type(self, stringifier: Stringifier) -> None:
         """Test 'int-range' type formats as 'min-max'."""
@@ -154,70 +154,70 @@ class TestStringifierTypeDispatch:
         })
         plans = stringifier("col", "int-range")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1-5", "3", ".", None]
+        assert result["col"].to_list() == ["1-5", "3", ".", "?"]
 
     def test_id_list_comma_separated(self, stringifier: Stringifier) -> None:
         """Test 'id_list' type produces comma-separated strings."""
-        df = pl.DataFrame({"col": [["a", "b", "c"], ["x"], []]})
+        df = pl.DataFrame({"col": [["a", "b", "c"], ["x"], [], None]})
         plans = stringifier("col", "id_list")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["a,b,c", "x", "."]
+        assert result["col"].to_list() == ["a,b,c", "x", ".", "?"]
 
     def test_id_list_spc_space_separated(self, stringifier: Stringifier) -> None:
         """Test 'id_list_spc' type produces space-separated strings."""
-        df = pl.DataFrame({"col": [["a", "b", "c"], ["x"], []]})
+        df = pl.DataFrame({"col": [["a", "b", "c"], ["x"], [], None]})
         plans = stringifier("col", "id_list_spc")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["a b c", "x", "."]
+        assert result["col"].to_list() == ["a b c", "x", ".", "?"]
 
     def test_date_type(self, stringifier: Stringifier) -> None:
         """Test 'yyyy-mm-dd' type formats dates."""
         df = pl.DataFrame({
-            "col": pl.Series(["2023-01-15", "2024-06-01"]).str.strptime(
-                pl.Date, "%Y-%m-%d"
+            "col": pl.Series(["2023-01-15", "2024-06-01", None]).str.strptime(
+                pl.Date, "%Y-%m-%d", strict=False
             )
         })
         plans = stringifier("col", "yyyy-mm-dd")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["2023-01-15", "2024-06-01"]
+        assert result["col"].to_list() == ["2023-01-15", "2024-06-01", "?"]
 
     def test_datetime_type(self, stringifier: Stringifier) -> None:
         """Test 'yyyy-mm-dd:hh:mm' type formats datetimes."""
         df = pl.DataFrame({
-            "col": pl.Series(["2023-01-15 10:30", "2024-06-01 14:45"]).str.strptime(
-                pl.Datetime, "%Y-%m-%d %H:%M"
+            "col": pl.Series(["2023-01-15 10:30", "2024-06-01 14:45", None]).str.strptime(
+                pl.Datetime, "%Y-%m-%d %H:%M", strict=False
             )
         })
         plans = stringifier("col", "yyyy-mm-dd:hh:mm")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["2023-01-15:10:30", "2024-06-01:14:45"]
+        assert result["col"].to_list() == ["2023-01-15:10:30", "2024-06-01:14:45", "?"]
 
     def test_enum_type(self, stringifier: Stringifier) -> None:
         """Test Enum dtype conversion."""
         df = pl.DataFrame({
-            "col": pl.Series(["A", "B", ""]).cast(pl.Enum(["A", "B", ""]))
+            "col": pl.Series(["A", "B", "", None]).cast(pl.Enum(["A", "B", ""]))
         })
         plans = stringifier.enum("col")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["A", "B", None]
+        assert result["col"].to_list() == ["A", "B", ".", "?"]
 
     def test_any_type_passthrough(self, stringifier: Stringifier) -> None:
         """Test 'any' type passes through strings."""
         df = pl.DataFrame({"col": ["hello", "world", None]})
         plans = stringifier("col", "any")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["hello", "world", None]
+        assert result["col"].to_list() == ["hello", "world", "?"]
 
     def test_unknown_type_fallback(self, stringifier: Stringifier) -> None:
         """Test unknown types fall back to 'any'."""
         df = pl.DataFrame({"col": ["test", "data", None]})
         plans = stringifier("col", "unknown_type_xyz")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["test", "data", None]
+        assert result["col"].to_list() == ["test", "data", "?"]
 
-    def test_null_to_dot_option(self) -> None:
-        """Test null_to_dot option converts nulls to '.'."""
-        stringifier = Stringifier(null_to_dot=True)
+    def test_null_int_option(self) -> None:
+        """Test null_int option changes null symbol for integers."""
+        stringifier = Stringifier(null_int=".")
         df = pl.DataFrame({"col": [1, 2, None]})
         plans = stringifier("col", "int")
         result = df.with_columns([p.expr for p in plans])
@@ -242,14 +242,14 @@ class TestStringifierDirectConversion:
         df = pl.DataFrame({"col": [123, -456, 0, None]})
         plans = stringifier("col", "int")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["123", "-456", "0", None]
+        assert result["col"].to_list() == ["123", "-456", "0", "?"]
 
     def test_float_conversion_without_esd(self, stringifier: Stringifier) -> None:
         """Test float type without ESD converts to strings."""
         df = pl.DataFrame({"col": [1.234, -5.678, 0.0, None]})
         plans = stringifier("col", "float", has_esd=False)
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.234", "-5.678", "0.0", None]
+        assert result["col"].to_list() == ["1.234", "-5.678", "0.0", "?"]
 
     def test_float_conversion_with_esd(self, stringifier: Stringifier) -> None:
         """Test float type with ESD merges correctly."""
@@ -259,7 +259,7 @@ class TestStringifierDirectConversion:
         })
         plans = stringifier("col", "float", has_esd=True)
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.234(5)", "5.678", "9.0(10)", None]
+        assert result["col"].to_list() == ["1.234(5)", "5.678", "9.0(10)", "?"]
         # Check that ESD column is consumed
         consumed = set()
         for plan in plans:
@@ -272,14 +272,14 @@ class TestStringifierDirectConversion:
         df = pl.DataFrame({"col": [1.234, math.nan, None]})
         plans = stringifier("col", "float", has_esd=False)
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.234", ".", None]
+        assert result["col"].to_list() == ["1.234", ".", "?"]
 
     def test_boolean_conversion(self, stringifier: Stringifier) -> None:
         """Test boolean type uses YES/NO strings."""
         df = pl.DataFrame({"col": [True, False, None]})
         plans = stringifier("col", "boolean")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["YES", "NO", None]
+        assert result["col"].to_list() == ["YES", "NO", "?"]
 
     def test_date_conversion(self, stringifier: Stringifier) -> None:
         """Test date type formats correctly."""
@@ -290,39 +290,39 @@ class TestStringifierDirectConversion:
         })
         plans = stringifier("col", "yyyy-mm-dd")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["2023-01-15", "2024-06-01", None]
+        assert result["col"].to_list() == ["2023-01-15", "2024-06-01", "?"]
 
     def test_datetime_conversion(self, stringifier: Stringifier) -> None:
         """Test datetime type formats correctly."""
         df = pl.DataFrame({
-            "col": pl.Series(["2023-01-15 10:30", "2024-06-01 14:45"]).str.strptime(
-                pl.Datetime, "%Y-%m-%d %H:%M"
+            "col": pl.Series(["2023-01-15 10:30", "2024-06-01 14:45", None]).str.strptime(
+                pl.Datetime, "%Y-%m-%d %H:%M", strict=False
             )
         })
         plans = stringifier("col", "yyyy-mm-dd:hh:mm")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["2023-01-15:10:30", "2024-06-01:14:45"]
+        assert result["col"].to_list() == ["2023-01-15:10:30", "2024-06-01:14:45", "?"]
 
     def test_id_list_comma_conversion(self, stringifier: Stringifier) -> None:
         """Test id_list produces comma-separated strings."""
         df = pl.DataFrame({"col": [["a", "b", "c"], ["x"], [], None]})
         plans = stringifier("col", "id_list")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["a,b,c", "x", ".", None]
+        assert result["col"].to_list() == ["a,b,c", "x", ".", "?"]
 
     def test_id_list_spc_conversion(self, stringifier: Stringifier) -> None:
         """Test id_list_spc produces space-separated strings."""
         df = pl.DataFrame({"col": [["a", "b", "c"], ["x"], [], None]})
         plans = stringifier("col", "id_list_spc")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["a b c", "x", ".", None]
+        assert result["col"].to_list() == ["a b c", "x", ".", "?"]
 
     def test_int_list_conversion(self, stringifier: Stringifier) -> None:
         """Test int_list produces comma-separated strings."""
         df = pl.DataFrame({"col": [[1, 2, 3], [42], [], None]})
         plans = stringifier("col", "int_list")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1,2,3", "42", ".", None]
+        assert result["col"].to_list() == ["1,2,3", "42", ".", "?"]
 
     def test_int_range_conversion(self, stringifier: Stringifier) -> None:
         """Test int-range type formats as 'min-max'."""
@@ -334,33 +334,33 @@ class TestStringifierDirectConversion:
         plans = stringifier("col", "int-range")
         result = df.with_columns([p.expr for p in plans])
         # Same min/max produces single value, null array produces "."
-        assert result["col"].to_list() == ["1-5", "3", ".", None]
+        assert result["col"].to_list() == ["1-5", "3", ".", "?"]
 
     def test_float_range_conversion(self, stringifier: Stringifier) -> None:
         """Test float-range type formats correctly."""
         df = pl.DataFrame({
-            "col": pl.Series([[1.5, 3.5], [2.0, 2.0]]).cast(pl.Array(pl.Float64, 2))
+            "col": pl.Series([[1.5, 3.5], [2.0, 2.0], None]).cast(pl.Array(pl.Float64, 2))
         })
         plans = stringifier("col", "float-range")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.5-3.5", "2.0"]
+        assert result["col"].to_list() == ["1.5-3.5", "2.0", "?"]
 
     def test_enum_conversion(self, stringifier: Stringifier) -> None:
         """Test Enum dtype converts to strings."""
         df = pl.DataFrame({
-            "col": pl.Series(["A", "B", ""]).cast(pl.Enum(["A", "B", ""]))
+            "col": pl.Series(["A", "B", "", None]).cast(pl.Enum(["A", "B", ""]))
         })
         plans = stringifier.enum("col")
         result = df.with_columns([p.expr for p in plans])
-        # Empty string becomes null
-        assert result["col"].to_list() == ["A", "B", None]
+        # Empty string becomes ".", null becomes "?"
+        assert result["col"].to_list() == ["A", "B", ".", "?"]
 
     def test_bool_enum_conversion(self, stringifier: Stringifier) -> None:
         """Test boolean-like enum uses specified values."""
         df = pl.DataFrame({"col": [True, False, None]})
         plans = stringifier("col", "any", bool_enum_true="yes", bool_enum_false="no")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["yes", "no", None]
+        assert result["col"].to_list() == ["yes", "no", "?"]
 
     def test_multiple_columns_conversion(self, stringifier: Stringifier) -> None:
         """Test converting multiple columns of different types."""
@@ -380,9 +380,10 @@ class TestStringifierDirectConversion:
         assert result["float_col"].to_list() == ["1.5", "2.5", "3.5"]
         assert result["bool_col"].to_list() == ["YES", "NO", "YES"]
 
-    def test_null_to_dot_all_types(self) -> None:
-        """Test null_to_dot option across types."""
-        stringifier = Stringifier(null_to_dot=True)
+    def test_per_type_null_options(self) -> None:
+        """Test per-type null options."""
+        # Use "." for int and "?" for str (defaults)
+        stringifier = Stringifier(null_int=".", null_str="?", null_float="?")
 
         # Int
         df = pl.DataFrame({"col": [1, None]})
@@ -392,19 +393,19 @@ class TestStringifierDirectConversion:
         # Float
         df = pl.DataFrame({"col": [1.0, None]})
         result = df.with_columns([p.expr for p in stringifier("col", "float")])
-        assert result["col"].to_list() == ["1.0", "."]
+        assert result["col"].to_list() == ["1.0", "?"]
 
         # String
         df = pl.DataFrame({"col": ["a", None]})
         result = df.with_columns([p.expr for p in stringifier("col", "any")])
-        assert result["col"].to_list() == ["a", "."]
+        assert result["col"].to_list() == ["a", "?"]
 
     def test_preserve_string_passthrough(self, stringifier: Stringifier) -> None:
-        """Test 'any' type preserves strings unchanged."""
+        """Test 'any' type preserves strings unchanged (nulls become null_str)."""
         df = pl.DataFrame({"col": ["hello", "world", "test", None]})
         plans = stringifier("col", "any")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["hello", "world", "test", None]
+        assert result["col"].to_list() == ["hello", "world", "test", "?"]
 
 
 class TestStringifierEdgeCases:
@@ -425,17 +426,17 @@ class TestStringifierEdgeCases:
         df = pl.DataFrame({"col": [None, None, None]})
         plans = stringifier("col", "any")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == [None, None, None]
+        assert result["col"].to_list() == ["?", "?", "?"]
 
     def test_float_range_same_values(self) -> None:
         """Test float-range with identical min/max outputs single value."""
         stringifier = Stringifier()
         df = pl.DataFrame({
-            "col": pl.Series([[1.5, 1.5], [2.0, 3.0]]).cast(pl.Array(pl.Float64, 2))
+            "col": pl.Series([[1.5, 1.5], [2.0, 3.0], None]).cast(pl.Array(pl.Float64, 2))
         })
         plans = stringifier("col", "float-range")
         result = df.with_columns([p.expr for p in plans])
-        assert result["col"].to_list() == ["1.5", "2.0-3.0"]
+        assert result["col"].to_list() == ["1.5", "2.0-3.0", "?"]
 
     def test_float_range_with_nan(self) -> None:
         """Test float-range with NaN values becomes '.'."""
@@ -512,9 +513,9 @@ class TestStringifierEdgeCases:
         result = df.with_columns([p.expr for p in plans])
         assert result["col"].to_list() == ["2023-05-20:15:45"]
 
-    def test_custom_nan_string(self) -> None:
-        """Test custom nan_string option."""
-        stringifier = Stringifier(nan_string="N/A")
+    def test_custom_nan_float(self) -> None:
+        """Test custom nan_float option."""
+        stringifier = Stringifier(nan_float="N/A")
         df = pl.DataFrame({"col": [1.0, float("nan")]})
         plans = stringifier("col", "float")
         result = df.with_columns([p.expr for p in plans])
@@ -614,7 +615,8 @@ class TestValuesToStrIntegration:
 
         # Verify in-place modification
         assert category.df["_test_cat.str_val"].dtype == pl.String
-        assert category.df["_test_cat.str_val"].to_list() == ["hello", "world", None]
+        # Null values become "?" by default
+        assert category.df["_test_cat.str_val"].to_list() == ["hello", "world", "?"]
 
     def test_values_to_str_with_int_column(self, minimal_dictionary: dict) -> None:
         """Test values_to_str correctly converts int columns to strings."""
@@ -640,7 +642,7 @@ class TestValuesToStrIntegration:
         validator.values_to_str(category)
 
         assert category.df["_test_cat.int_val"].dtype == pl.String
-        assert category.df["_test_cat.int_val"].to_list() == ["1", "2", "3", None]
+        assert category.df["_test_cat.int_val"].to_list() == ["1", "2", "3", "?"]
 
     def test_values_to_str_with_boolean_column(self, minimal_dictionary: dict) -> None:
         """Test values_to_str correctly converts boolean columns to strings."""
@@ -665,7 +667,7 @@ class TestValuesToStrIntegration:
         validator.values_to_str(category, bool_true="YES", bool_false="NO")
 
         assert category.df["_test_cat.bool_val"].dtype == pl.String
-        assert category.df["_test_cat.bool_val"].to_list() == ["YES", "NO", None]
+        assert category.df["_test_cat.bool_val"].to_list() == ["YES", "NO", "?"]
 
     def test_values_to_str_with_custom_bool_strings(self, minimal_dictionary: dict) -> None:
         """Test values_to_str with custom boolean strings."""
@@ -759,8 +761,8 @@ class TestValuesToStrIntegration:
 
         assert result is None
 
-    def test_null_to_dot_option(self, minimal_dictionary: dict) -> None:
-        """Test null_to_dot=True converts nulls to '.'."""
+    def test_null_str_option(self, minimal_dictionary: dict) -> None:
+        """Test null_str='.' converts string nulls to '.'."""
         validator = DDL2Validator(minimal_dictionary)
 
         df = pl.DataFrame({
@@ -768,7 +770,7 @@ class TestValuesToStrIntegration:
         })
         category = CIFDataCategory(code="test_cat", content=df, variant="mmcif")
 
-        validator.values_to_str(category, null_to_dot=True)
+        validator.values_to_str(category, null_str=".")
 
         assert category.df["_test_cat.str_val"].to_list() == ["hello", ".", "world"]
 
