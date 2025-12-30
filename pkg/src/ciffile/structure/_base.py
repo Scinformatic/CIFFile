@@ -369,6 +369,31 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
             df_name=f"{self.code} ({self.container_type})",
         )
 
+    @overload
+    def write(
+        self,
+        writer: None = None,
+        *,
+        # String casting parameters
+        bool_true: str = "YES",
+        bool_false: str = "NO",
+        null_str: Literal[".", "?"] = "?",
+        null_float: Literal[".", "?"] = "?",
+        null_int: Literal[".", "?"] = "?",
+        null_bool: Literal[".", "?"] = "?",
+        empty_str: Literal[".", "?"] = ".",
+        nan_float: Literal[".", "?"] = ".",
+        # Styling parameters
+        always_table: bool = False,
+        list_style: Literal["horizontal", "tabular", "vertical"] = "tabular",
+        table_style: Literal["horizontal", "tabular-horizontal", "tabular-vertical", "vertical"] = "tabular-horizontal",
+        space_items: int = 2,
+        min_space_columns: int = 2,
+        indent: int = 0,
+        indent_inner: int = 0,
+        delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
+    ) -> str: ...
+    @overload
     def write(
         self,
         writer: Callable[[str], None],
@@ -391,11 +416,43 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
         indent: int = 0,
         indent_inner: int = 0,
         delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
-    ) -> None:
+    ) -> None: ...
+    def write(
+        self,
+        writer: Callable[[str], None] | None = None,
+        *,
+        # String casting parameters
+        bool_true: str = "YES",
+        bool_false: str = "NO",
+        null_str: Literal[".", "?"] = "?",
+        null_float: Literal[".", "?"] = "?",
+        null_int: Literal[".", "?"] = "?",
+        null_bool: Literal[".", "?"] = "?",
+        empty_str: Literal[".", "?"] = ".",
+        nan_float: Literal[".", "?"] = ".",
+        # Styling parameters
+        always_table: bool = False,
+        list_style: Literal["horizontal", "tabular", "vertical"] = "tabular",
+        table_style: Literal["horizontal", "tabular-horizontal", "tabular-vertical", "vertical"] = "tabular-horizontal",
+        space_items: int = 2,
+        min_space_columns: int = 2,
+        indent: int = 0,
+        indent_inner: int = 0,
+        delimiter_preference: Sequence[Literal["single", "double", "semicolon"]] = ("single", "double", "semicolon"),
+    ) -> str | None:
         """Write this container in CIF format.
 
         Parameters
         ----------
+        writer
+            A callable that takes a string and writes it to the desired output.
+            This could be a file write method or any other string-consuming function.
+            For example, you can create a list and pass its `append` method
+            to collect the output chunks into the list.
+            The whole CIF content can then be obtained by joining the list elements,
+            i.e., `''.join(output_list)`.
+            If `None` (default), the function will return
+            the entire CIF content as a single string.
         bool_true
             Symbol to use for boolean `True` values.
         bool_false
@@ -518,17 +575,28 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
 
         Returns
         -------
-        None
-            Uses the provided `writer` callable to output the CIF data category.
+        cif_content
+            If `writer` is not provided (i.e., is `None`),
+            the entire CIF content is returned as a single string.
+            Otherwise, the provided `writer` callable
+            is used to output the CIF content,
+            and `None` is returned.
 
         Raises
         ------
         TypeError
-            If the input DataFrame contains unsupported dtypes.
+            If the data values are of unsupported types.
         ValueError
             If any multiline string contains a line beginning with ';',
             which cannot be represented exactly as a CIF 1.1 text field.
         """
+        if writer is None:
+            chunks: list[str] = []
+            writer = chunks.append
+            writer_provided = False
+        else:
+            writer_provided = True
+
         self._write(
             writer,
             bool_true=bool_true,
@@ -548,7 +616,10 @@ class CIFStructureWithItem(CIFStructure[ElementType]):
             indent_inner=indent_inner,
             delimiter_preference=delimiter_preference,
         )
-        return
+
+        if writer_provided:
+            return None
+        return "".join(chunks)
 
     def __str__(self) -> str:
         """String representation of the CIF data structure."""
