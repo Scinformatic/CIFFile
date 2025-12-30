@@ -10,8 +10,9 @@ A comprehensive Python library for reading, creating, processing, validating, an
 - **📖 Read CIF Files**: Parse CIF files from strings, file paths, or file-like objects
 - **✏️ Create CIF Files**: Build CIF files from tabular data (Polars, Pandas, dictionaries, etc.)
 - **✅ Validate**: Validate CIF files against DDL2 dictionaries
+- **🧱 Cast**: Automatically cast data values from strings into type-specific formats and back
 - **💾 Write**: Export CIF files with customizable formatting and styling
-- **🔄 Convert**: Transform between different CIF representations
+- **🔄 Convert**: Transform between different data representations
 - **🎯 Query**: Access data blocks, save frames, categories, and items with intuitive indexing
 - **🐼 DataFrames**: Work seamlessly with Polars and Pandas DataFrames
 - **🧪 Two Variants**: Support for both CIF 1.1 and mmCIF formats
