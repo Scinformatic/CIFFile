@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping, Literal, TypedDict, overload, TYPE_CHECKING
+from typing import Mapping, Literal, TypedDict, overload, TYPE_CHECKING, Sequence, Callable
 
 import polars as pl
 
