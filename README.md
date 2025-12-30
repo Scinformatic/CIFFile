@@ -27,8 +27,8 @@ pip install ciffile
 ### Dependencies
 
 - [Polars](https://pola.rs/) >= 1.0 (high-performance DataFrame library)
-- [Pydantic](https://docs.pydantic.dev/latest/) >= 2 (data validation)
-- [FileEx](https://github.com/scinformatic/fileex) >= 0.2.9 (file handling utilities)
+- [Pydantic](https://docs.pydantic.dev/latest/) >= 2.0 (data validation)
+- [FileEx](https://github.com/scinformatic/fileex) >= 0.2.10 (file handling utilities)
 - [tqdm](https://github.com/tqdm/tqdm) >= 4.0 (progress bars)
 
 ## Quick Start
@@ -90,20 +90,17 @@ with open("output.cif", "w") as f:
 ### Validating CIF Files
 
 ```python
-# Validate against DDL2 dictionary
-from ciffile.validation.ddl2 import DDL2Validator
-
 # Read dictionary file
 dictionary_cif = ciffile.read("mmcif_pdbx_v50.dic")
 
 # Convert to validator dictionary format
 validator_dict = dictionary_cif.to_validator_dict(variant="ddl2")
 
-# Create validator
-validator = DDL2Validator(validator_dict)
+# Create validator using the public API
+validator = ciffile.validator(validator_dict)
 
-# Validate and cast data
-validated_cif = validator.validate(cif)
+# Validate and cast data (modifies cif in-place, returns error DataFrame)
+errors = validator.validate(cif)
 ```
 
 ## Usage Examples
