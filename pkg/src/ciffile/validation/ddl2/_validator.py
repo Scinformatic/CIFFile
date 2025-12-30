@@ -11,7 +11,7 @@ import polars as pl
 from .._base import CIFFileValidator
 from ._input_schema import DDL2Dictionary
 from ._caster import Caster, CastPlan
-from ._stringifier import Stringifier
+from ._stringifier import Stringifier, pick_bool_enum_pair
 
 if TYPE_CHECKING:
     from ciffile.structure import CIFFile, CIFBlock, CIFDataCategory
@@ -305,8 +305,7 @@ class DDL2Validator(CIFFileValidator):
 
     def values_to_str(
         self,
-        df: pl.DataFrame,
-        category: str,
+        file: CIFFile | CIFBlock | CIFDataCategory,
         *,
         esd_col_suffix: str = "_esd_digits",
         bool_true: str = "YES",
@@ -318,21 +317,25 @@ class DDL2Validator(CIFFileValidator):
         nan_string: str = ".",
         null_to_dot: bool = False,
         drop_esd_columns: bool = True,
-    ) -> pl.DataFrame:
+        uchar_case_normalization: Literal["lower", "upper"] | None = None,
+    ) -> None:
         """Convert typed DataFrame columns back to CIF string format.
 
         This method reverses the data type transformations performed by `validate()`,
         converting typed Polars columns back to their original CIF string representations.
+        The conversion is done in-place, modifying the `df` property of each
+        `CIFDataCategory` object.
 
         The method uses the DDL2 type code for each item to determine the correct
         reverse transformation, mirroring the type-based dispatch in `Caster`.
 
         Parameters
         ----------
-        df
-            DataFrame with typed columns (after `validate()` processing).
-        category
-            Category name (used to look up item definitions in the dictionary).
+        file
+            CIF file, data block, or data category to convert back to strings.
+            The method iterates over all contained `CIFDataCategory` objects
+            (similar to `validate()`) and replaces each category's DataFrame
+            with the stringified version.
         esd_col_suffix
             Suffix used for estimated standard deviation (ESD) columns.
             ESD columns will be merged back into the main column using parenthesized notation.
@@ -369,15 +372,11 @@ class DDL2Validator(CIFFileValidator):
         drop_esd_columns
             Whether to drop ESD columns from the output after merging.
             Default is True.
-
-        Returns
-        -------
-        pl.DataFrame
-            DataFrame with all columns converted to string type (pl.Utf8).
-            ESD columns are merged into their main columns and optionally dropped.
-            Boolean/Enum columns are converted to their string representations.
-            Date/datetime columns are formatted as strings.
-            List/array columns are joined with the appropriate delimiter based on type.
+        uchar_case_normalization
+            Case normalization for "uchar"-type (case-insensitive) string columns.
+            If "lower", all string values are converted to lowercase.
+            If "upper", all string values are converted to uppercase.
+            If `None` (default), no case normalization is performed.
 
         Notes
         -----
@@ -396,25 +395,55 @@ class DDL2Validator(CIFFileValidator):
         - **"id_list_spc"**: List → space-separated.
         - **Date/datetime types**: Formatted per `date_format`/`datetime_format`.
         - **Enum columns**: Converted to plain strings, empty → null.
+        - **"uchar" primitive**: Case normalized per `uchar_case_normalization`.
 
         Examples
         --------
         >>> # After validate() produces typed columns
-        >>> validated_df = validator.validate(category)
-        >>> # Convert back to strings for CIF output
-        >>> string_df = validator.values_to_str(validated_df, "atom_site")
+        >>> validator.validate(category)
+        >>> # Convert back to strings for CIF output (in-place)
+        >>> validator.values_to_str(category)
         """
-        from ._stringifier import pick_bool_enum_pair
+        self._stringify_esd_col_suffix = esd_col_suffix
+        self._stringify_bool_true = bool_true
+        self._stringify_bool_false = bool_false
+        self._stringify_enum_true_set = {v.lower() for v in enum_true}
+        self._stringify_enum_false_set = {v.lower() for v in enum_false}
+        self._stringify_enum_bool_set = self._stringify_enum_true_set | self._stringify_enum_false_set
+        self._stringify_date_format = date_format
+        self._stringify_datetime_format = datetime_format
+        self._stringify_nan_string = nan_string
+        self._stringify_null_to_dot = null_to_dot
+        self._stringify_drop_esd_columns = drop_esd_columns
+        self._stringify_uchar_case_normalization = uchar_case_normalization
 
+        if file.container_type == "category":
+            self._stringify_category(file)
+            return
+
+        blocks: list[CIFBlock] = [file] if file.container_type == "block" else file
+        for block in blocks:
+            for frame in block.frames:
+                for frame_category in frame:
+                    self._stringify_category(frame_category)
+            for block_category in block:
+                self._stringify_category(block_category)
+        return
+
+    def _stringify_category(self, cat: CIFDataCategory) -> None:
+        """Convert a single category's DataFrame back to CIF string format."""
         stringifier = Stringifier(
-            esd_col_suffix=esd_col_suffix,
-            bool_true=bool_true,
-            bool_false=bool_false,
-            date_format=date_format,
-            datetime_format=datetime_format,
-            nan_string=nan_string,
-            null_to_dot=null_to_dot,
+            esd_col_suffix=self._stringify_esd_col_suffix,
+            bool_true=self._stringify_bool_true,
+            bool_false=self._stringify_bool_false,
+            date_format=self._stringify_date_format,
+            datetime_format=self._stringify_datetime_format,
+            nan_string=self._stringify_nan_string,
+            null_to_dot=self._stringify_null_to_dot,
         )
+
+        df = cat.df
+        category = cat.code
 
         # Get item definitions for this category
         item_defs = {
@@ -422,11 +451,6 @@ class DDL2Validator(CIFFileValidator):
             for name, item_def in self._dict["item"].items()
             if item_def.get("category") == category
         }
-
-        # Build lowercase sets for boolean-like enum detection
-        enum_true_set = {v.lower() for v in enum_true}
-        enum_false_set = {v.lower() for v in enum_false}
-        enum_bool_set = enum_true_set | enum_false_set
 
         exprs: list[pl.Expr] = []
         columns_to_drop: set[str] = set()
@@ -437,16 +461,18 @@ class DDL2Validator(CIFFileValidator):
                 continue
 
             # Check if this is an ESD column - skip, will be handled with main column
-            if col_name.endswith(esd_col_suffix):
+            if col_name.endswith(self._stringify_esd_col_suffix):
                 continue
 
             # Find item definition
             item_def = item_defs.get(col_name)
-            esd_col_name = f"{col_name}{esd_col_suffix}"
+            esd_col_name = f"{col_name}{self._stringify_esd_col_suffix}"
             has_esd = esd_col_name in df.columns
 
-            # Determine type code
+            # Determine type code and primitive
             type_code = item_def.get("type", "any") if item_def else "any"
+            # type_primitive is stored on the item definition after preprocessing
+            type_prim = item_def.get("type_primitive", "char") if item_def else "char"
 
             # Get column dtype
             col_dtype = df.schema.get(col_name)
@@ -463,9 +489,13 @@ class DDL2Validator(CIFFileValidator):
                 if enum:
                     enum_vals = list(enum.keys())
                     enum_vals_lower = {v.lower() for v in enum_vals}
-                    if enum_vals_lower.issubset(enum_bool_set):
+                    if enum_vals_lower.issubset(self._stringify_enum_bool_set):
                         # Pick consistent pair from original enumeration
-                        pair = pick_bool_enum_pair(enum_vals, enum_true_set, enum_false_set)
+                        pair = pick_bool_enum_pair(
+                            enum_vals,
+                            self._stringify_enum_true_set,
+                            self._stringify_enum_false_set,
+                        )
                         if pair:
                             bool_enum_true_val, bool_enum_false_val = pair
 
@@ -491,10 +521,19 @@ class DDL2Validator(CIFFileValidator):
                 )
 
             for plan in plans:
-                exprs.append(plan.expr)
+                expr = plan.expr
+                # Apply uchar case normalization if applicable
+                # The Stringifier outputs strings, so we can apply case normalization
+                # unconditionally for uchar-primitive types
+                if type_prim == "uchar" and self._stringify_uchar_case_normalization:
+                    if self._stringify_uchar_case_normalization == "lower":
+                        expr = expr.str.to_lowercase()
+                    else:
+                        expr = expr.str.to_uppercase()
+                exprs.append(expr)
                 processed_cols.update(plan.consumes)
 
-            if has_esd and drop_esd_columns:
+            if has_esd and self._stringify_drop_esd_columns:
                 columns_to_drop.add(esd_col_name)
 
         # Apply all string conversions
@@ -504,7 +543,9 @@ class DDL2Validator(CIFFileValidator):
         if columns_to_drop:
             result = result.drop(list(columns_to_drop))
 
-        return result
+        # Update the category's DataFrame in-place
+        cat.df = result
+        return
 
     def _validate_category(self, cat: CIFDataCategory) -> None:
         """Validate an mmCIF data category against the DDL2 dictionary."""
