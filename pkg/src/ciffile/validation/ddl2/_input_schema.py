@@ -28,7 +28,7 @@ class DDL2ItemType(BaseModel):
 
     primitive: Literal["char", "uchar", "numb"]
     regex: str
-    detail: str | None
+    detail: str | None = None
 
 
 class DDL2CategoryDef(BaseModel):
@@ -38,6 +38,7 @@ class DDL2CategoryDef(BaseModel):
     mandatory: bool
     groups: list[str]
     keys: list[str]
+    id: str | None = None
 
 
 class DDL2ItemDef(BaseModel):
@@ -45,6 +46,8 @@ class DDL2ItemDef(BaseModel):
 
     Attributes
     ----------
+    id
+        Identifier of the data item.
     category
         Name of the category this data item belongs to.
     description
@@ -80,6 +83,7 @@ class DDL2ItemDef(BaseModel):
     description: str
     mandatory: bool
     type: str
+    id: str | None = None
     type_conditions: list[Literal["esd", "seq"]] | None = None
     aliases: list[dict[str, str]] | None = None
     default: str | None = None

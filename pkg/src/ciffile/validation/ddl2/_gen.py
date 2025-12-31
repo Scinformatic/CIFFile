@@ -198,6 +198,7 @@ class DDL2Generator:
             category = cat["category"]
             cat_id = cat["category"]["id"].value
             out[cat_id.lower()] = {
+                "id": cat_id,
                 "description": nws(category["description"].value),
                 "mandatory": category["mandatory_code"].value.lower() == "yes",
                 "groups": cat.get("category_group").get("id").values.to_list(),
@@ -229,6 +230,7 @@ class DDL2Generator:
             item_self, item_others = self._normalize_item_df(item_frame["item"].df, frame_code=item_frame.code)
 
             item_dict = {
+                "id": item_frame.code,
                 "category": item_self["category_id"].lower(),
                 "mandatory": item_self["mandatory_code"] == "yes",
                 "others": item_others
@@ -309,7 +311,7 @@ class DDL2Generator:
                 f"Data item definition '{frame_code}' has invalid mandatory_code values."
             )
 
-        frame_code_category, frame_code_keyword = frame_code.split(".", 1)
+        frame_code_category, _ = frame_code.lower().split(".", 1)
 
         # Normalize item names
         if "name" not in df:
@@ -357,7 +359,7 @@ class DDL2Generator:
                 f"Data item definition '{frame_code}' has duplicated item names after normalization."
             )
 
-        row_is_self = (df["name"] == frame_code) & (df["category_id"] == frame_code_category)
+        row_is_self = (df["name"] == frame_code.lower()) & (df["category_id"] == frame_code_category)
         if not row_is_self.any():
             raise ValueError(
                 f"Data item definition '{frame_code}' missing definition for itself."
